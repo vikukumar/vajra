@@ -24,6 +24,12 @@ jobs:
       with:
         components: clippy, rustfmt
 
+    - name: Configure GNU Toolchain (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        rustup toolchain install stable-x86_64-pc-windows-gnu
+        rustup default stable-x86_64-pc-windows-gnu
+
     - name: Install LLVM & Clang (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
