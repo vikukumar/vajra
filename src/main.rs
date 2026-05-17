@@ -55,6 +55,10 @@ pub unsafe extern "C" fn _setjmp(_env: *mut std::ffi::c_void, _sender: *mut std:
     0
 }
 
+#[cfg(target_os = "windows")]
+#[link(name = "ffi")]
+extern "C" {}
+
 use clap::{Parser as ClapParser, Subcommand};
 use std::fs;
 use std::io::{self, Write};
