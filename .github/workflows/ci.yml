@@ -49,9 +49,9 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: bash
       run: |
-        tar -xzf llvm_msys64.tar.gz -C C:/
-        echo "LLVM_SYS_191_PREFIX=C:/llvm_msys64/mingw64" >> $GITHUB_ENV
-        echo "C:/llvm_msys64/mingw64/bin" >> $GITHUB_PATH
+        tar -xzf llvm_msys64.tar.gz
+        echo "LLVM_SYS_191_PREFIX=$GITHUB_WORKSPACE/llvm_msys64/mingw64" >> $GITHUB_ENV
+        echo "$GITHUB_WORKSPACE/llvm_msys64/mingw64/bin" >> $GITHUB_PATH
 
     - name: Verify LLVM installation
       shell: bash
