@@ -45,6 +45,7 @@ jobs:
         echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
 
     - name: Verify LLVM installation
+      shell: bash
       run: |
         llvm-config --version || true
 
