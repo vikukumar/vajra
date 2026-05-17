@@ -2,6 +2,8 @@ name: Vajra Compiler Precompiled Release Builder
 
 on:
   push:
+    branches:
+      - initial
     tags:
       - 'v*'
   workflow_dispatch:
@@ -40,6 +42,19 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
+
+    - name: Auto-Detect Project Version
+      id: detect_version
+      shell: bash
+      run: |
+        VERSION=$(cargo pkgid | cut -d '#' -f 2)
+        MAJOR=$(echo $VERSION | cut -d '.' -f 1)
+        MINOR=$(echo $VERSION | cut -d '.' -f 2)
+        PATCH=$(echo $VERSION | cut -d '.' -f 3)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "major=$MAJOR" >> $GITHUB_OUTPUT
+        echo "minor=$MINOR" >> $GITHUB_OUTPUT
+        echo "major_minor=$MAJOR.$MINOR" >> $GITHUB_OUTPUT
 
     - name: Configure GNU Toolchain (Windows)
       if: matrix.os == 'windows-latest'
@@ -98,7 +113,9 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: ${{ matrix.archive_name }}
+        tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.detect_version.outputs.version) }}
+        name: ${{ github.ref_type == 'tag' && github.ref_name || format('Vajra Compiler v{0} (v{1})', steps.detect_version.outputs.version, steps.detect_version.outputs.major_minor) }}
         draft: false
-        prerelease: false
+        prerelease: ${{ github.ref_type != 'tag' }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
