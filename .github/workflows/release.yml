@@ -85,6 +85,12 @@ jobs:
         cp llvm_msys64/mingw64/bin/libzstd.dll llvm_msys64/mingw64/lib/libzstd.dll
         cp llvm_msys64/mingw64/bin/libxml2-2.dll llvm_msys64/mingw64/lib/libxml2.dll.a
         cp llvm_msys64/mingw64/bin/libxml2-2.dll llvm_msys64/mingw64/lib/libxml2.dll
+        cp llvm_msys64/mingw64/bin/libffi-8.dll llvm_msys64/mingw64/lib/libffi.dll.a
+        cp llvm_msys64/mingw64/bin/libffi-8.dll llvm_msys64/mingw64/lib/libffi.dll
+        cp llvm_msys64/mingw64/bin/libwinpthread-1.dll llvm_msys64/mingw64/lib/libpthread.dll.a
+        cp llvm_msys64/mingw64/bin/libwinpthread-1.dll llvm_msys64/mingw64/lib/libpthread.dll
+        cp llvm_msys64/mingw64/bin/libwinpthread-1.dll llvm_msys64/mingw64/lib/libwinpthread.dll.a
+        cp llvm_msys64/mingw64/bin/libwinpthread-1.dll llvm_msys64/mingw64/lib/libwinpthread.dll
         echo "LLVM_SYS_191_PREFIX=$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64")" >> $GITHUB_ENV
         echo "$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64/bin")" >> $GITHUB_PATH
 

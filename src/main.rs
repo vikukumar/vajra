@@ -48,6 +48,12 @@
     clippy::manual_strip
 )]
 
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub unsafe extern "C" fn _setjmp(_env: *mut std::ffi::c_void, _sender: *mut std::ffi::c_void) -> std::os::raw::c_int {
+    0
+}
+
 use clap::{Parser as ClapParser, Subcommand};
 use std::fs;
 use std::io::{self, Write};
