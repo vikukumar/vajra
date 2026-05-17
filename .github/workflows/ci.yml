@@ -39,11 +39,19 @@ jobs:
 
     - name: Install LLVM & Clang (Windows)
       if: matrix.os == 'windows-latest'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: false
+        install: >-
+          mingw-w64-x86_64-llvm
+
+    - name: Configure MSYS2 LLVM paths (Windows)
+      if: matrix.os == 'windows-latest'
       shell: bash
       run: |
-        choco install llvm -y --version=19.1.0 --allow-downgrade
-        echo "LLVM_SYS_191_PREFIX=C:\Program Files\LLVM" >> $GITHUB_ENV
-        echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
+        echo "LLVM_SYS_191_PREFIX=C:/msys64/mingw64" >> $GITHUB_ENV
+        echo "C:/msys64/mingw64/bin" >> $GITHUB_PATH
 
     - name: Verify LLVM installation
       shell: bash
