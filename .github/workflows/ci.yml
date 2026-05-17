@@ -50,6 +50,7 @@ jobs:
       shell: bash
       run: |
         tar -xzf llvm_msys64.tar.gz
+        cp llvm_msys64/mingw64/bin/llvm-config-real.exe llvm_msys64/mingw64/bin/llvm-config.exe
         echo "LLVM_SYS_191_PREFIX=$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64")" >> $GITHUB_ENV
         echo "$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64/bin")" >> $GITHUB_PATH
 
