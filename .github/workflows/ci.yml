@@ -51,9 +51,12 @@ jobs:
       run: |
         tar -xzf llvm_msys64.tar.gz
         cp llvm_msys64/mingw64/bin/llvm-config-real.exe llvm_msys64/mingw64/bin/llvm-config.exe
+        cp llvm_msys64/mingw64/bin/libzstd.dll llvm_msys64/mingw64/lib/libzstd.dll.a
+        cp llvm_msys64/mingw64/bin/libzstd.dll llvm_msys64/mingw64/lib/libzstd.dll
+        cp llvm_msys64/mingw64/bin/libxml2-2.dll llvm_msys64/mingw64/lib/libxml2.dll.a
+        cp llvm_msys64/mingw64/bin/libxml2-2.dll llvm_msys64/mingw64/lib/libxml2.dll
         echo "LLVM_SYS_191_PREFIX=$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64")" >> $GITHUB_ENV
         echo "$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64/bin")" >> $GITHUB_PATH
-        echo "RUSTFLAGS=-L$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64/bin") -L$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64/lib")" >> $GITHUB_ENV
 
     - name: Verify LLVM installation
       shell: bash
