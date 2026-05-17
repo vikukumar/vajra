@@ -2,9 +2,9 @@ name: Vajra Compiler Continuous Integration
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ initial ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ initial ]
 
 jobs:
   build:
