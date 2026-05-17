@@ -44,7 +44,7 @@ jobs:
     - name: Configure GNU Toolchain (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        rustup toolchain install stable-x86_64-pc-windows-gnu
+        rustup toolchain install stable-x86_64-pc-windows-gnu --component clippy
         rustup default stable-x86_64-pc-windows-gnu
 
     - name: Install LLVM & Clang (Linux)
