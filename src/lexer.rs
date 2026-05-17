@@ -19,6 +19,9 @@ pub enum TokenKind {
     Catch,    // catch, ग्रहण, पकड़ें
     Throw,    // throw, त्यज, फेंकें
     Import,   // import, आयात
+    For,      // for, कृते, चक्र
+    In,       // in, अन्तः, मध्ये, में
+    
     
     // Decorators
     MainDecorator,   // @main
@@ -72,6 +75,8 @@ lazy_static! {
         m.insert("catch", TokenKind::Catch);
         m.insert("throw", TokenKind::Throw);
         m.insert("import", TokenKind::Import);
+        m.insert("for", TokenKind::For);
+        m.insert("in", TokenKind::In);
         
         // Sanskrit
         m.insert("कार्या", TokenKind::Function);
@@ -89,6 +94,9 @@ lazy_static! {
         m.insert("ग्रहण", TokenKind::Catch);
         m.insert("त्यज", TokenKind::Throw);
         m.insert("आयात", TokenKind::Import);
+        m.insert("कृते", TokenKind::For);
+        m.insert("अन्तः", TokenKind::In);
+        m.insert("मध्ये", TokenKind::In);
         
         // Hindi
         m.insert("कार्य", TokenKind::Function);
@@ -102,6 +110,9 @@ lazy_static! {
         m.insert("प्रयास", TokenKind::Try);
         m.insert("पकड़ें", TokenKind::Catch);
         m.insert("फेंकें", TokenKind::Throw);
+        m.insert("चक्र", TokenKind::For);
+        m.insert("में", TokenKind::In);
+        m.insert("अन्दर", TokenKind::In);
         
         m
     };
@@ -221,9 +232,12 @@ impl<'a> Lexer<'a> {
                 let mut num = g.to_string();
                 num.push_str(&self.read_number());
                 if num.contains('.') {
-                    TokenKind::Float(num.parse().unwrap())
+                    TokenKind::Float(num.parse().unwrap_or(0.0))
                 } else {
-                    TokenKind::Integer(num.parse().unwrap())
+                    match num.parse::<i64>() {
+                        Ok(val) => TokenKind::Integer(val),
+                        Err(_) => TokenKind::Float(num.parse::<f64>().unwrap_or(0.0)),
+                    }
                 }
             }
             "\"" => TokenKind::String(self.read_string()),

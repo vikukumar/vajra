@@ -55,7 +55,7 @@ pub unsafe extern "C" fn _setjmp(_env: *mut std::ffi::c_void, _sender: *mut std:
     0
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", target_env = "gnu"))]
 #[link(name = "ffi")]
 extern "C" {}
 
@@ -124,7 +124,16 @@ fn merge_imports(statements: Vec<vajra_core::ast::Statement>, current_dir: &Path
     let mut merged = Vec::new();
     for stmt in statements {
         if let vajra_core::ast::Statement::Import(path_str) = stmt {
-            let import_path = current_dir.join(&path_str);
+            let mut import_path = current_dir.join(&path_str);
+            if !import_path.exists() {
+                for ext in &["v", "vj", "vajra"] {
+                    let candidate = import_path.with_extension(ext);
+                    if candidate.exists() {
+                        import_path = candidate;
+                        break;
+                    }
+                }
+            }
             let canonical_path = fs::canonicalize(&import_path)
                 .unwrap_or_else(|_| import_path.clone());
             

@@ -346,6 +346,34 @@ impl<'ctx> Codegen<'ctx> {
                 let _ = self.builder.build_call(throw_fn, &[val.into()], "throw_call").map_err(|e| e.to_string())?;
                 let _ = self.builder.build_unreachable().map_err(|e| e.to_string())?;
             }
+            Statement::For { var_name, iterable, body } => {
+                let let_stmt = Statement::Let {
+                    name: var_name.clone(),
+                    value: Expression::Literal(Literal::Integer(0)),
+                };
+                
+                let mut while_body = body.clone();
+                while_body.push(Statement::Let {
+                    name: var_name.clone(),
+                    value: Expression::BinaryOp {
+                        left: Box::new(Expression::Identifier(var_name.clone())),
+                        op: "+".to_string(),
+                        right: Box::new(Expression::Literal(Literal::Integer(1))),
+                    },
+                });
+                
+                let while_stmt = Statement::While {
+                    condition: Expression::BinaryOp {
+                        left: Box::new(Expression::Identifier(var_name.clone())),
+                        op: "<".to_string(),
+                        right: Box::new(iterable.clone()),
+                    },
+                    body: while_body,
+                };
+                
+                self.compile_statement(&let_stmt)?;
+                self.compile_statement(&while_stmt)?;
+            }
         }
         Ok(())
     }

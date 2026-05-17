@@ -80,6 +80,58 @@ impl Evaluator {
                 }
                 Ok(last_val)
             }
+            Statement::For { var_name, iterable, body } => {
+                let iter_val = self.eval_expression(iterable)?;
+                let mut last_val = Value::Void;
+                
+                match iter_val {
+                    Value::Integer(n) => {
+                        let original_val = self.env.get(var_name).cloned();
+                        for i in 0..n {
+                            self.env.insert(var_name.clone(), Value::Integer(i));
+                            for stmt in body {
+                                last_val = self.eval_statement(stmt)?;
+                            }
+                        }
+                        if let Some(orig) = original_val {
+                            self.env.insert(var_name.clone(), orig);
+                        } else {
+                            self.env.remove(var_name);
+                        }
+                    }
+                    Value::Float(f) => {
+                        let original_val = self.env.get(var_name).cloned();
+                        let n = f as i64;
+                        for i in 0..n {
+                            self.env.insert(var_name.clone(), Value::Integer(i));
+                            for stmt in body {
+                                last_val = self.eval_statement(stmt)?;
+                            }
+                        }
+                        if let Some(orig) = original_val {
+                            self.env.insert(var_name.clone(), orig);
+                        } else {
+                            self.env.remove(var_name);
+                        }
+                    }
+                    Value::String(s) => {
+                        let original_val = self.env.get(var_name).cloned();
+                        for c in s.chars() {
+                            self.env.insert(var_name.clone(), Value::String(c.to_string()));
+                            for stmt in body {
+                                last_val = self.eval_statement(stmt)?;
+                            }
+                        }
+                        if let Some(orig) = original_val {
+                            self.env.insert(var_name.clone(), orig);
+                        } else {
+                            self.env.remove(var_name);
+                        }
+                    }
+                    Value::Void => {}
+                }
+                Ok(last_val)
+            }
             Statement::If { condition, then_body, else_body } => {
                 let cond_val = self.eval_expression(condition)?;
                 let is_truthy = match cond_val {
@@ -228,34 +280,34 @@ impl Evaluator {
             }
             Expression::FunctionCall { name, args } => {
                 if name == "print" {
-                    if args.is_empty() {
-                        println!();
-                        return Ok(Value::Void);
+                    let mut vals = Vec::new();
+                    for arg in args {
+                        let val = self.eval_expression(arg)?;
+                        vals.push(match val {
+                            Value::Integer(i) => format!("{}", i),
+                            Value::Float(f) => format!("{}", f),
+                            Value::String(s) => s,
+                            Value::Void => "Void".to_string(),
+                        });
                     }
-                    let val = self.eval_expression(&args[0])?;
-                    match &val {
-                        Value::Integer(i) => println!("{}", i),
-                        Value::Float(f) => println!("{}", f),
-                        Value::String(s) => println!("{}", s),
-                        Value::Void => println!("Void"),
-                    }
+                    println!("{}", vals.join(" "));
                     Ok(Value::Void)
                 } else {
                     Err(format!("Error: Unknown function '{}'", name))
                 }
             }
             Expression::Intrinsic(crate::ast::Intrinsic::Print(args)) => {
-                if args.is_empty() {
-                    println!();
-                    return Ok(Value::Void);
+                let mut vals = Vec::new();
+                for arg in args {
+                    let val = self.eval_expression(arg)?;
+                    vals.push(match val {
+                        Value::Integer(i) => format!("{}", i),
+                        Value::Float(f) => format!("{}", f),
+                        Value::String(s) => s,
+                        Value::Void => "Void".to_string(),
+                    });
                 }
-                let val = self.eval_expression(&args[0])?;
-                match &val {
-                    Value::Integer(i) => println!("{}", i),
-                    Value::Float(f) => println!("{}", f),
-                    Value::String(s) => println!("{}", s),
-                    Value::Void => println!("Void"),
-                }
+                println!("{}", vals.join(" "));
                 Ok(Value::Void)
             }
             _ => Err("Error: Expression type not yet supported in interpreter".to_string()),

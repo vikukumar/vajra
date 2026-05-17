@@ -73,6 +73,11 @@ pub enum Statement {
         condition: Expression,
         body: Vec<Statement>,
     },
+    For {
+        var_name: String,
+        iterable: Expression,
+        body: Vec<Statement>,
+    },
     If {
         condition: Expression,
         then_body: Vec<Statement>,

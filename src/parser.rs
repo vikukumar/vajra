@@ -59,13 +59,13 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Import => {
                 self.next_token(); // skip import / आयात
-                if let TokenKind::String(path) = &self.cur_token.kind {
-                    let path_str = path.clone();
-                    self.next_token();
-                    Some(Statement::Import(path_str))
-                } else {
-                    panic!("Expected string path after import statement");
-                }
+                let path_str = match &self.cur_token.kind {
+                    TokenKind::String(path) => path.clone(),
+                    TokenKind::Identifier(path) => path.clone(),
+                    _ => panic!("Expected string path or identifier after import statement"),
+                };
+                self.next_token();
+                Some(Statement::Import(path_str))
             }
             TokenKind::Function => {
                 self.next_token();
@@ -107,6 +107,7 @@ impl<'a> Parser<'a> {
                 Some(Statement::Let { name: var_name, value })
             }
             TokenKind::While => self.parse_while(),
+            TokenKind::For => self.parse_for(),
             TokenKind::If => self.parse_if(),
             TokenKind::Try => self.parse_try_catch(),
             TokenKind::Throw => self.parse_throw(),
@@ -408,6 +409,55 @@ impl<'a> Parser<'a> {
         }
 
         left
+    }
+
+    fn parse_for(&mut self) -> Option<Statement> {
+        self.next_token(); // skip 'for' / 'कृते' / 'चक्र'
+        
+        let has_paren = self.cur_token.kind == TokenKind::LParen;
+        if has_paren {
+            self.next_token(); // skip '('
+        }
+        
+        let var_name = if let TokenKind::Identifier(id) = &self.cur_token.kind {
+            id.clone()
+        } else {
+            panic!("Expected loop variable identifier in for-loop, got {:?}", self.cur_token);
+        };
+        self.next_token(); // skip loop variable identifier
+        
+        if self.cur_token.kind != TokenKind::In {
+            panic!("Expected 'in' keyword in for-loop, got {:?}", self.cur_token);
+        }
+        self.next_token(); // skip 'in' / 'अन्तः' / 'में'
+        
+        let iterable = self.parse_expression(0);
+        
+        if has_paren {
+            if self.cur_token.kind != TokenKind::RParen {
+                panic!("Expected ')' after for-loop condition, got {:?}", self.cur_token);
+            }
+            self.next_token(); // skip ')'
+        }
+        
+        while self.cur_token.kind == TokenKind::Newline {
+            self.next_token();
+        }
+        
+        let mut body = Vec::new();
+        if self.cur_token.kind == TokenKind::LBrace {
+            self.next_token(); // skip '{'
+            while self.cur_token.kind != TokenKind::RBrace && self.cur_token.kind != TokenKind::EOF {
+                if let Some(stmt) = self.parse_statement() {
+                    body.push(stmt);
+                } else {
+                    self.next_token();
+                }
+            }
+            self.next_token(); // skip '}'
+        }
+        
+        Some(Statement::For { var_name, iterable, body })
     }
 
     fn parse_while(&mut self) -> Option<Statement> {
