@@ -21,6 +21,17 @@ pub enum TokenKind {
     Import,   // import, आयात
     For,      // for, कृते, चक्र
     In,       // in, अन्तः, मध्ये, में
+    Const,    // const
+    Var,      // var
+    Async,    // async
+    Await,    // await
+    New,      // new
+    This,     // this, self
+    True,     // true, True, सत्यम्
+    False,    // false, False, असत्यम्
+    Null,     // null, None, void, शून्य
+    SpawnKeyword, // spawn, thread, parallel
+    
     
     
     // Decorators
@@ -77,6 +88,27 @@ lazy_static! {
         m.insert("import", TokenKind::Import);
         m.insert("for", TokenKind::For);
         m.insert("in", TokenKind::In);
+        m.insert("const", TokenKind::Const);
+        m.insert("var", TokenKind::Var);
+        m.insert("async", TokenKind::Async);
+        m.insert("await", TokenKind::Await);
+        m.insert("new", TokenKind::New);
+        m.insert("this", TokenKind::This);
+        m.insert("self", TokenKind::This);
+        m.insert("true", TokenKind::True);
+        m.insert("True", TokenKind::True);
+        m.insert("false", TokenKind::False);
+        m.insert("False", TokenKind::False);
+        m.insert("null", TokenKind::Null);
+        m.insert("None", TokenKind::Null);
+        m.insert("void", TokenKind::Null);
+        m.insert("spawn", TokenKind::SpawnKeyword);
+        m.insert("thread", TokenKind::SpawnKeyword);
+        m.insert("parallel", TokenKind::SpawnKeyword);
+        m.insert("def", TokenKind::Function);
+        m.insert("function", TokenKind::Function);
+        m.insert("require", TokenKind::Import);
+        m.insert("elif", TokenKind::Else);
         
         // Sanskrit
         m.insert("कार्या", TokenKind::Function);
@@ -97,6 +129,9 @@ lazy_static! {
         m.insert("कृते", TokenKind::For);
         m.insert("अन्तः", TokenKind::In);
         m.insert("मध्ये", TokenKind::In);
+        m.insert("सत्यम्", TokenKind::True);
+        m.insert("असत्यम्", TokenKind::False);
+        m.insert("शून्य", TokenKind::Null);
         
         // Hindi
         m.insert("कार्य", TokenKind::Function);
@@ -113,6 +148,8 @@ lazy_static! {
         m.insert("चक्र", TokenKind::For);
         m.insert("में", TokenKind::In);
         m.insert("अन्दर", TokenKind::In);
+        m.insert("सत्य", TokenKind::True);
+        m.insert("असत्य", TokenKind::False);
         
         m
     };

@@ -576,9 +576,28 @@ impl<'ctx> Codegen<'ctx> {
                 // We'd cast this pointer and call the constructor next
                 Ok(ptr)
             }
-            Expression::Spawn { task: _ } => {
-                // Self-hosting ready hook for lock-free concurrency (e.g. threading spawn)
-                Err("Spawn concurrency primitive not lowered in v0.1".to_string())
+            Expression::Spawn { task } => {
+                let func_name = match &**task {
+                    Expression::FunctionCall { name, .. } => name.clone(),
+                    Expression::Identifier(name) => name.clone(),
+                    _ => return Err("Spawn task must be a function call or function identifier".to_string()),
+                };
+                
+                let target_func = self.module.get_function(&func_name)
+                    .ok_or_else(|| format!("Spawn Error: Function '{}' not found", func_name))?;
+                
+                let spawn_fn = match self.module.get_function("vajra_spawn") {
+                    Some(f) => f,
+                    None => {
+                        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                        let spawn_type = self.context.void_type().fn_type(&[ptr_type.into()], false);
+                        self.module.add_function("vajra_spawn", spawn_type, None)
+                    }
+                };
+                
+                let func_ptr = target_func.as_global_value().as_pointer_value();
+                let _ = self.builder.build_call(spawn_fn, &[func_ptr.into()], "spawn_call").map_err(|e| e.to_string())?;
+                Ok(self.context.i64_type().const_int(0, false).into())
             }
             Expression::BinaryOp { left, op, right } => {
                 let lhs = self.compile_expression(left)?;

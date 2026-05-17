@@ -310,6 +310,15 @@ impl Evaluator {
                 println!("{}", vals.join(" "));
                 Ok(Value::Void)
             }
+            Expression::Spawn { task } => {
+                let task_clone = task.clone();
+                let env_clone = self.env.clone();
+                std::thread::spawn(move || {
+                    let mut eval = Evaluator { env: env_clone };
+                    let _ = eval.eval_expression(&task_clone);
+                });
+                Ok(Value::Integer(0))
+            }
             _ => Err("Error: Expression type not yet supported in interpreter".to_string()),
         }
     }

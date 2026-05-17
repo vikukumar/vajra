@@ -98,7 +98,16 @@ impl<'a> Parser<'a> {
             TokenKind::Class => {
                 self.parse_class()
             }
-            TokenKind::Let => self.parse_let_statement(),
+            TokenKind::Let | TokenKind::Const | TokenKind::Var => self.parse_let_statement(),
+            TokenKind::Async => {
+                self.next_token(); // skip async
+                self.parse_statement()
+            }
+            TokenKind::SpawnKeyword => {
+                self.next_token(); // skip spawn
+                let expr = self.parse_expression(0);
+                Some(Statement::Expression(Expression::Spawn { task: Box::new(expr) }))
+            }
             TokenKind::Identifier(name) if self.peek_token.kind == TokenKind::Assign => {
                 let var_name = name.clone();
                 self.next_token(); // skip identifier
@@ -316,6 +325,34 @@ impl<'a> Parser<'a> {
                 self.next_token();
                 expr
             }
+            TokenKind::True => {
+                let expr = Expression::Literal(Literal::Integer(1));
+                self.next_token();
+                expr
+            }
+            TokenKind::False => {
+                let expr = Expression::Literal(Literal::Integer(0));
+                self.next_token();
+                expr
+            }
+            TokenKind::Null => {
+                let expr = Expression::Literal(Literal::Integer(0));
+                self.next_token();
+                expr
+            }
+            TokenKind::This => {
+                let expr = Expression::Identifier("this".to_string());
+                self.next_token();
+                expr
+            }
+            TokenKind::New => {
+                self.next_token(); // skip new
+                self.parse_expression(0)
+            }
+            TokenKind::Await => {
+                self.next_token(); // skip await
+                self.parse_expression(0)
+            }
             TokenKind::Identifier(id) => {
                 let expr = Expression::Identifier(id.clone());
                 self.next_token();
@@ -370,11 +407,30 @@ impl<'a> Parser<'a> {
                             }
                         }
                         self.next_token(); // skip ')'
-                        left = Expression::MethodCall {
-                            receiver: Box::new(left),
-                            method,
-                            args,
+                        // Intercept console.log and System.out.println/print
+                        let is_console_log = match &left {
+                            Expression::Identifier(name) => name == "console" && method == "log",
+                            _ => false,
                         };
+                        let is_system_out_println = match &left {
+                            Expression::PropertyAccess { object, property } => {
+                                match &**object {
+                                    Expression::Identifier(name) => name == "System" && property == "out" && (method == "println" || method == "print"),
+                                    _ => false,
+                                }
+                            }
+                            _ => false,
+                        };
+                        
+                        if is_console_log || is_system_out_println {
+                            left = Expression::Intrinsic(Intrinsic::Print(args));
+                        } else {
+                            left = Expression::MethodCall {
+                                receiver: Box::new(left),
+                                method,
+                                args,
+                            };
+                        }
                     } else {
                         left = Expression::PropertyAccess {
                             object: Box::new(left),

@@ -249,7 +249,24 @@ DWORD WINAPI parallel_thread_proc_helper(LPVOID param) {
     task->worker_fn(task->start, task->end, task->sum_ptr, task->nodes);
     return 0;
 }
+
+DWORD WINAPI spawn_thread_proc_helper(LPVOID param) {
+    void (*fn)(void) = (void (*)(void))param;
+    fn();
+    return 0;
+}
 #endif
+
+void vajra_spawn(void (*fn)(void)) {
+#ifdef _WIN32
+    HANDLE thread = CreateThread(NULL, 0, spawn_thread_proc_helper, (LPVOID)fn, 0, NULL);
+    if (thread != NULL) {
+        CloseHandle(thread);
+    }
+#else
+    fn();
+#endif
+}
 
 void vajra_parallel_for(
     long long start, 
