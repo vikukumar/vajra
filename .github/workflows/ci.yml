@@ -39,6 +39,7 @@ jobs:
 
     - name: Install LLVM & Clang (Windows)
       if: matrix.os == 'windows-latest'
+      shell: bash
       run: |
         choco install llvm -y --version=19.1.0 --allow-downgrade
         echo "LLVM_SYS_191_PREFIX=C:\Program Files\LLVM" >> $GITHUB_ENV
