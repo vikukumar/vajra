@@ -35,3 +35,6 @@ _temp_*
 /benchmark/fib_cpp
 /benchmark/fib_cpp.exe
 /benchmark/fib_cpp.obj
+
+legacy_bootstrap_rust
+legacy_bootstrap_rust/
