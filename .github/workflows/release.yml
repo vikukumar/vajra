@@ -47,7 +47,7 @@ jobs:
       id: detect_version
       shell: bash
       run: |
-        VERSION=$(cargo pkgid | cut -d '#' -f 2)
+        VERSION=$(grep '^version =' Cargo.toml | head -n 1 | cut -d '"' -f 2)
         MAJOR=$(echo $VERSION | cut -d '.' -f 1)
         MINOR=$(echo $VERSION | cut -d '.' -f 2)
         PATCH=$(echo $VERSION | cut -d '.' -f 3)
