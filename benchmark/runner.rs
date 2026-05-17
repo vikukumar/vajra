@@ -3,6 +3,20 @@ use std::time::Instant;
 use std::fs;
 use std::path::Path;
 
+fn get_speedup_factor(vajra_time: f64, other_time: f64) -> String {
+    if other_time == 0.0 || vajra_time == 0.0 {
+        return "N/A".to_string();
+    }
+    let ratio = other_time / vajra_time;
+    if ratio > 1.05 {
+        format!("{:.2}x slower", ratio)
+    } else if ratio < 0.95 {
+        format!("{:.2}x faster", 1.0 / ratio)
+    } else {
+        "1.00x (Equal)".to_string()
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("============================================================");
     println!("Vajra Performance Benchmarking Suite: Fibonacci, Loop & NN");
@@ -318,12 +332,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("---------|-------------------|-------------------------|----------------");
     println!("Vajra    | {:<17.2} | 1.00x (Baseline)        | {}", fib_vj_avg, fib_vj_val);
     if has_rust {
-        println!("Rust     | {:<17.2} | {:.2}x slower           | {}", fib_rs_avg, fib_rs_avg / fib_vj_avg, fib_rs_val);
+        println!("Rust     | {:<17.2} | {:<23} | {}", fib_rs_avg, get_speedup_factor(fib_vj_avg, fib_rs_avg), fib_rs_val);
     } else {
         println!("Rust     | N/A               | N/A                     | N/A");
     }
     if has_cpp {
-        println!("C++      | {:<17.2} | {:.2}x slower           | {}", fib_cpp_avg, fib_cpp_avg / fib_vj_avg, fib_cpp_val);
+        println!("C++      | {:<17.2} | {:<23} | {}", fib_cpp_avg, get_speedup_factor(fib_vj_avg, fib_cpp_avg), fib_cpp_val);
     } else {
         println!("C++      | N/A               | N/A                     | N/A");
     }
@@ -336,65 +350,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("---------|-------------------|-------------------------|----------------");
     println!("Vajra    | {:<17.2} | 1.00x (Baseline)        | {}", loop_vj_avg, loop_vj_val);
     if has_rust {
-        println!("Rust     | {:<17.2} | {:.2}x slower           | {}", loop_rs_avg, loop_rs_avg / loop_vj_avg, loop_rs_val);
+        println!("Rust     | {:<17.2} | {:<23} | {}", loop_rs_avg, get_speedup_factor(loop_vj_avg, loop_rs_avg), loop_rs_val);
     } else {
         println!("Rust     | N/A               | N/A                     | N/A");
     }
     if has_cpp {
-        println!("C++      | {:<17.2} | {:.2}x slower           | {}", loop_cpp_avg, loop_cpp_avg / loop_vj_avg, loop_cpp_val);
+        println!("C++      | {:<17.2} | {:<23} | {}", loop_cpp_avg, get_speedup_factor(loop_vj_avg, loop_cpp_avg), loop_cpp_val);
     } else {
         println!("C++      | N/A               | N/A                     | N/A");
     }
-    println!("============================================================");
-
     println!("\n============================================================");
-    println!("Benchmark Suite 3: Neural Network Node Activations (10,000,000 runs)");
+    println!("Benchmark Suite 3: Neural Network Node Activations (10,000,000,000 runs)");
     println!("============================================================");
     println!("Language | Average Time (ms) | Speedup Factor vs Vajra | Verified Result");
     println!("---------|-------------------|-------------------------|----------------");
     println!("Vajra    | {:<17.2} | 1.00x (Baseline)        | {}", nn_vj_avg, nn_vj_val);
     if has_rust {
-        println!("Rust     | {:<17.2} | {:.2}x slower           | {}", nn_rs_avg, nn_rs_avg / nn_vj_avg, nn_rs_val);
+        println!("Rust     | {:<17.2} | {:<23} | {}", nn_rs_avg, get_speedup_factor(nn_vj_avg, nn_rs_avg), nn_rs_val);
     } else {
         println!("Rust     | N/A               | N/A                     | N/A");
     }
     if has_cpp {
-        println!("C++      | {:<17.2} | {:.2}x slower           | {}", nn_cpp_avg, nn_cpp_avg / nn_vj_avg, nn_cpp_val);
+        println!("C++      | {:<17.2} | {:<23} | {}", nn_cpp_avg, get_speedup_factor(nn_vj_avg, nn_cpp_avg), nn_cpp_val);
     } else {
         println!("C++      | N/A               | N/A                     | N/A");
     }
     println!("============================================================");
-
+ 
     let report_content = format!(
         "# Vajra Performance Benchmark Report\n\n\
-        This document contains high-precision timing results comparing identical Recursive Fibonacci `fib(40)`, Iterative Loop (1,000,000,000 iterations), and Matrix-Free Deep Neural Network Node Activations (10,000,000 iterations) implementations across Vajra, Rust, and C++.\n\n\
+        This document contains high-precision timing results comparing identical Recursive Fibonacci `fib(40)`, Iterative Loop (1,000,000,000 iterations), and Matrix-Free Deep Neural Network Node Activations (10,000,000,000 iterations) implementations across Vajra, Rust, and C++.\n\n\
         ## 📊 Benchmark Suite 1: Recursive Fibonacci (40)\n\n\
         | Language | Average Time (ms) | Speedup Factor (Vajra Speedup) | Verified Output |\n\
         | :--- | :--- | :--- | :--- |\n\
         | **Vajra (LLVM + Memoization)** | **{:.2} ms** | **1.00x (Baseline)** | **{}** |\n\
-        | **Rust** | **{:.2} ms** | **{:.2}x slower** | **{}** |\n\
-        | **C++** | **{:.2} ms** | **{:.2}x slower** | **{}** |\n\n\
+        | **Rust** | **{:.2} ms** | **{}** | **{}** |\n\
+        | **C++** | **{:.2} ms** | **{}** | **{}** |\n\n\
         ## 📊 Benchmark Suite 2: Iterative Loop (1,000,000,000 iterations)\n\n\
         | Language | Average Time (ms) | Speedup Factor (Vajra Speedup) | Verified Output |\n\
         | :--- | :--- | :--- | :--- |\n\
         | **Vajra (LLVM AOT)** | **{:.2} ms** | **1.00x (Baseline)** | **{}** |\n\
-        | **Rust** | **{:.2} ms** | **{:.2}x slower** | **{}** |\n\
-        | **C++** | **{:.2} ms** | **{:.2}x slower** | **{}** |\n\n\
-        ## 📊 Benchmark Suite 3: Neural Network Node Activations (10,000,000 iterations)\n\n\
+        | **Rust** | **{:.2} ms** | **{}** | **{}** |\n\
+        | **C++** | **{:.2} ms** | **{}** | **{}** |\n\n\
+        ## 📊 Benchmark Suite 3: Neural Network Node Activations (10,000,000,000 iterations)\n\n\
         | Language | Average Time (ms) | Speedup Factor (Vajra Speedup) | Verified Output |\n\
         | :--- | :--- | :--- | :--- |\n\
         | **Vajra (LLVM AOT)** | **{:.2} ms** | **1.00x (Baseline)** | **{}** |\n\
-        | **Rust** | **{:.2} ms** | **{:.2}x slower** | **{}** |\n\
-        | **C++** | **{:.2} ms** | **{:.2}x slower** | **{}** |\n"
+        | **Rust** | **{:.2} ms** | **{}** | **{}** |\n\
+        | **C++** | **{:.2} ms** | **{}** | **{}** |\n"
         , fib_vj_avg, fib_vj_val
-        , if has_rust { fib_rs_avg } else { 0.0 }, if has_rust { fib_rs_avg / fib_vj_avg } else { 0.0 }, fib_rs_val
-        , if has_cpp { fib_cpp_avg } else { 0.0 }, if has_cpp { fib_cpp_avg / fib_vj_avg } else { 0.0 }, fib_cpp_val
+        , if has_rust { fib_rs_avg } else { 0.0 }, get_speedup_factor(fib_vj_avg, fib_rs_avg), fib_rs_val
+        , if has_cpp { fib_cpp_avg } else { 0.0 }, get_speedup_factor(fib_vj_avg, fib_cpp_avg), fib_cpp_val
         , loop_vj_avg, loop_vj_val
-        , if has_rust { loop_rs_avg } else { 0.0 }, if has_rust { loop_rs_avg / loop_vj_avg } else { 0.0 }, loop_rs_val
-        , if has_cpp { loop_cpp_avg } else { 0.0 }, if has_cpp { loop_cpp_avg / loop_vj_avg } else { 0.0 }, loop_cpp_val
+        , if has_rust { loop_rs_avg } else { 0.0 }, get_speedup_factor(loop_vj_avg, loop_rs_avg), loop_rs_val
+        , if has_cpp { loop_cpp_avg } else { 0.0 }, get_speedup_factor(loop_vj_avg, loop_cpp_avg), loop_cpp_val
         , nn_vj_avg, nn_vj_val
-        , if has_rust { nn_rs_avg } else { 0.0 }, if has_rust { nn_rs_avg / nn_vj_avg } else { 0.0 }, nn_rs_val
-        , if has_cpp { nn_cpp_avg } else { 0.0 }, if has_cpp { nn_cpp_avg / nn_vj_avg } else { 0.0 }, nn_cpp_val
+        , if has_rust { nn_rs_avg } else { 0.0 }, get_speedup_factor(nn_vj_avg, nn_rs_avg), nn_rs_val
+        , if has_cpp { nn_cpp_avg } else { 0.0 }, get_speedup_factor(nn_vj_avg, nn_cpp_avg), nn_cpp_val
     );
 
     fs::write("benchmark/benchmark_report.md", report_content)?;

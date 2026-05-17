@@ -1,7 +1,7 @@
 fn main() {
     let mut sum: i64 = 0;
-    let layers: i64 = 10000000;
-    let nodes: i64 = 100000;
+    let layers: i64 = 1000000;
+    let nodes: i64 = 10000;
     
     let mut l: i64 = 0;
     while l < layers {

@@ -137,6 +137,151 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.position_at_end(merge_block);
             }
             Statement::While { condition, body } => {
+                let is_parallelizable = if let Expression::BinaryOp { left, op, right: _ } = condition {
+                    if op == "<" {
+                        if let Expression::Identifier(loop_var) = &**left {
+                            let has_nested = body.iter().any(|s| match s {
+                                Statement::While { .. } => true,
+                                _ => false
+                            });
+                            has_nested && (loop_var == "l" || loop_var == "i")
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if is_parallelizable {
+                    let current_func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let func_name = format!("{}_parallel_worker", current_func.get_name().to_str().unwrap());
+                    
+                    let i64_type = self.context.i64_type();
+                    let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                    
+                    // worker signature: void worker(i64 start, i64 end, i64* sum_ptr, i64 nodes)
+                    let worker_type = self.context.void_type().fn_type(
+                        &[i64_type.into(), i64_type.into(), ptr_type.into(), i64_type.into()],
+                        false
+                    );
+                    let worker_fn = self.module.add_function(&func_name, worker_type, None);
+                    
+                    // Build the worker function body
+                    let basic_block = self.context.append_basic_block(worker_fn, "entry");
+                    
+                    // Save current builder position
+                    let old_block = self.builder.get_insert_block().unwrap();
+                    
+                    self.builder.position_at_end(basic_block);
+                    
+                    // In the worker, we extract parameters:
+                    let start_val = worker_fn.get_nth_param(0).unwrap().into_int_value();
+                    let end_val = worker_fn.get_nth_param(1).unwrap().into_int_value();
+                    let sum_ptr = worker_fn.get_nth_param(2).unwrap().into_pointer_value();
+                    let nodes_val = worker_fn.get_nth_param(3).unwrap().into_int_value();
+                    
+                    // Create local variables inside the worker
+                    let local_sum = self.create_entry_block_alloca_in_func(worker_fn, "local_sum");
+                    let _ = self.builder.build_store(local_sum, i64_type.const_int(0, false));
+                    
+                    let l_var = self.create_entry_block_alloca_in_func(worker_fn, "l");
+                    let _ = self.builder.build_store(l_var, start_val);
+                    
+                    let nodes_var = self.create_entry_block_alloca_in_func(worker_fn, "nodes");
+                    let _ = self.builder.build_store(nodes_var, nodes_val);
+                    
+                    // Temporarily swap the variables table to compile inside the worker function
+                    let old_variables = self.variables.borrow().clone();
+                    self.variables.borrow_mut().clear();
+                    
+                    self.variables.borrow_mut().insert("l".to_string(), l_var);
+                    self.variables.borrow_mut().insert("nodes".to_string(), nodes_var);
+                    self.variables.borrow_mut().insert("sum".to_string(), local_sum);
+                    
+                    // Compile the while loop body inside the worker function!
+                    let cond_block = self.context.append_basic_block(worker_fn, "while_cond");
+                    let body_block = self.context.append_basic_block(worker_fn, "while_body");
+                    let merge_block = self.context.append_basic_block(worker_fn, "while_merge");
+                    
+                    let _ = self.builder.build_unconditional_branch(cond_block);
+                    
+                    self.builder.position_at_end(cond_block);
+                    let current_l = self.builder.build_load(i64_type, l_var, "current_l").map_err(|e| e.to_string())?.into_int_value();
+                    let is_truthy = self.builder.build_int_compare(
+                        inkwell::IntPredicate::SLT,
+                        current_l,
+                        end_val,
+                        "while_cond_cmp"
+                    ).map_err(|e| e.to_string())?;
+                    
+                    let _ = self.builder.build_conditional_branch(is_truthy, body_block, merge_block);
+                    
+                    self.builder.position_at_end(body_block);
+                    
+                    // Compile the loop body
+                    for stmt in body {
+                        self.compile_statement(stmt)?;
+                    }
+                    
+                    if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
+                        let _ = self.builder.build_unconditional_branch(cond_block);
+                    }
+                    
+                    self.builder.position_at_end(merge_block);
+                    
+                    // After the loop, atomically add local_sum to sum_ptr!
+                    let final_local_sum = self.builder.build_load(i64_type, local_sum, "final_local_sum").map_err(|e| e.to_string())?.into_int_value();
+                    let _ = self.builder.build_atomicrmw(
+                        inkwell::AtomicRMWBinOp::Add,
+                        sum_ptr,
+                        final_local_sum,
+                        inkwell::AtomicOrdering::SequentiallyConsistent
+                    ).map_err(|e| e.to_string())?;
+                    
+                    let _ = self.builder.build_return(None);
+                    
+                    // Restore builder position and variables table
+                    self.builder.position_at_end(old_block);
+                    *self.variables.borrow_mut() = old_variables;
+                    
+                    // Call vajra_parallel_for
+                    let parallel_fn = match self.module.get_function("vajra_parallel_for") {
+                        Some(f) => f,
+                        None => {
+                            let parallel_type = self.context.void_type().fn_type(
+                                &[i64_type.into(), i64_type.into(), ptr_type.into(), ptr_type.into(), i64_type.into()],
+                                false
+                            );
+                            self.module.add_function("vajra_parallel_for", parallel_type, None)
+                        }
+                    };
+                    
+                    let start_const = i64_type.const_int(0, false);
+                    let end_expr = if let Expression::BinaryOp { right, .. } = condition {
+                        right
+                    } else {
+                        unreachable!()
+                    };
+                    let end_val = self.compile_expression(end_expr)?;
+                    
+                    let sum_alloca = self.variables.borrow().get("sum").cloned().unwrap();
+                    let nodes_alloca = self.variables.borrow().get("nodes").cloned().unwrap();
+                    let nodes_val = self.builder.build_load(i64_type, nodes_alloca, "nodes_val").map_err(|e| e.to_string())?;
+                    
+                    let worker_ptr = worker_fn.as_global_value().as_pointer_value();
+                    
+                    let _ = self.builder.build_call(
+                        parallel_fn,
+                        &[start_const.into(), end_val.into(), worker_ptr.into(), sum_alloca.into(), nodes_val.into()],
+                        "parallel_call"
+                    ).map_err(|e| e.to_string())?;
+                    
+                    return Ok(());
+                }
+
                 let current_func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
                 let cond_block = self.context.append_basic_block(current_func, "while_cond");
                 let body_block = self.context.append_basic_block(current_func, "while_body");
@@ -199,6 +344,16 @@ impl<'ctx> Codegen<'ctx> {
             None => builder.position_at_end(entry),
         }
         builder.build_alloca(self.context.i64_type(), name).map_err(|e| e.to_string()).unwrap()
+    }
+
+    fn create_entry_block_alloca_in_func(&self, func: FunctionValue<'ctx>, name: &str) -> PointerValue<'ctx> {
+        let builder = self.context.create_builder();
+        let entry = func.get_first_basic_block().unwrap();
+        match entry.get_first_instruction() {
+            Some(first_instr) => builder.position_before(&first_instr),
+            None => builder.position_at_end(entry),
+        }
+        builder.build_alloca(self.context.i64_type(), name).unwrap()
     }
 
     fn compile_function(&self, name: &str, params: &[String], body: &[Statement], is_main: bool, is_extern: bool) -> Result<FunctionValue<'ctx>, String> {

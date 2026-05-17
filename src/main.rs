@@ -182,6 +182,81 @@ void __main(void) {
     SetConsoleOutputCP(65001);
 #endif
 }
+
+typedef struct {
+    void (*worker_fn)(long long, long long, long long*, long long);
+    long long start;
+    long long end;
+    long long* sum_ptr;
+    long long nodes;
+} ParallelTask;
+
+#ifdef _WIN32
+DWORD WINAPI parallel_thread_proc_helper(LPVOID param) {
+    ParallelTask* task = (ParallelTask*)param;
+    task->worker_fn(task->start, task->end, task->sum_ptr, task->nodes);
+    return 0;
+}
+#endif
+
+void vajra_parallel_for(
+    long long start, 
+    long long end, 
+    void (*worker_fn)(long long, long long, long long*, long long), 
+    long long* sum_ptr, 
+    long long nodes
+) {
+#ifdef _WIN32
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    int num_threads = sysinfo.dwNumberOfProcessors;
+    if (num_threads < 1) num_threads = 1;
+    if (num_threads > 64) num_threads = 64;
+
+    long long total_iters = end - start;
+    if (total_iters <= 0) return;
+
+    if (total_iters < 100) {
+        worker_fn(start, end, sum_ptr, nodes);
+        return;
+    }
+
+    if (num_threads > total_iters) {
+        num_threads = (int)total_iters;
+    }
+
+    HANDLE* threads = (HANDLE*)malloc(sizeof(HANDLE) * num_threads);
+    ParallelTask* tasks = (ParallelTask*)malloc(sizeof(ParallelTask) * num_threads);
+
+    long long chunk_size = total_iters / num_threads;
+    long long rem = total_iters % num_threads;
+
+    long long current_start = start;
+    for (int i = 0; i < num_threads; i++) {
+        long long current_end = current_start + chunk_size + (i < rem ? 1 : 0);
+        
+        tasks[i].worker_fn = worker_fn;
+        tasks[i].start = current_start;
+        tasks[i].end = current_end;
+        tasks[i].sum_ptr = sum_ptr;
+        tasks[i].nodes = nodes;
+
+        threads[i] = CreateThread(NULL, 0, parallel_thread_proc_helper, &tasks[i], 0, NULL);
+        current_start = current_end;
+    }
+
+    WaitForMultipleObjects(num_threads, threads, TRUE, INFINITE);
+
+    for (int i = 0; i < num_threads; i++) {
+        CloseHandle(threads[i]);
+    }
+
+    free(threads);
+    free(tasks);
+#else
+    worker_fn(start, end, sum_ptr, nodes);
+#endif
+}
 "#;
     fs::write(&runtime_c_path, runtime_code)?;
 
