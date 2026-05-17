@@ -50,6 +50,7 @@
 
 #[cfg(target_os = "windows")]
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn _setjmp(_env: *mut std::ffi::c_void, _sender: *mut std::ffi::c_void) -> std::os::raw::c_int {
     0
 }
