@@ -1,0 +1,29 @@
+[package]
+name = "vajra"
+version = "0.1.0"
+edition = "2021"
+description = "Vajra: Powering the Intelligence of Tomorrow"
+
+[dependencies]
+# LLVM bindings
+inkwell = { version = "0.9.0", features = ["llvm19-1"] }
+# Unicode support for multi-lingual identifiers
+unicode-segmentation = "1.13.2"
+# Error handling
+anyhow = "1.0.102"
+# CLI argument parsing
+clap = { version = "4.6.1", features = ["derive"] }
+# Static keyword mapping
+lazy_static = "1.5.0"
+# For hashing keywords
+hashbrown = "0.14.5"
+# MSVC tool discovery
+cc = "1.2.62"
+
+[lib]
+name = "vajra_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vajrac"
+path = "src/main.rs"

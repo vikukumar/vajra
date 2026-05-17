@@ -1,0 +1,41 @@
+# ==========================================
+# Vajra Crate GitIgnore Config
+# ==========================================
+
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# OS or editor specific
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Vajra Intermediate Object and Binary Artifacts
+*.o
+*.obj
+*.exe
+*.pdb
+*.ilk
+_temp_*
+*temp*
+
+# Precompiled Releases and Local Dev executables
+/vajrac.exe
+/vajrac
+/test.exe
+
+# Benchmarking suite binaries
+/benchmark/fib_vj
+/benchmark/fib_vj.exe
+/benchmark/fib_rs
+/benchmark/fib_rs.exe
+/benchmark/fib_cpp
+/benchmark/fib_cpp.exe
+/benchmark/fib_cpp.obj
+
+*.exe 
+
+*.o

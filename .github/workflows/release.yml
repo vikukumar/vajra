@@ -1,0 +1,89 @@
+name: Vajra Compiler Precompiled Release Builder
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build Compiler Release for ${{ matrix.target_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target_name: linux-x86_64
+            binary_name: vajrac
+            archive_name: vajrac-linux-x86_64.tar.gz
+          - os: macos-latest
+            target_name: macos-aarch64
+            binary_name: vajrac
+            archive_name: vajrac-macos-aarch64.tar.gz
+          - os: windows-latest
+            target_name: windows-x86_64
+            binary_name: vajrac.exe
+            archive_name: vajrac-windows-x86_64.zip
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Rust Toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+
+    - name: Install LLVM & Clang (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y llvm-19-dev libclang-19-dev clang-19
+        echo "LLVM_SYS_191_PREFIX=/usr/lib/llvm-19" >> $GITHUB_ENV
+
+    - name: Install LLVM & Clang (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install llvm@19
+        echo "LLVM_SYS_191_PREFIX=$(brew --prefix llvm@19)" >> $GITHUB_ENV
+
+    - name: Install LLVM & Clang (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        choco install llvm -y --version=19.1.0
+        echo "LLVM_SYS_191_PREFIX=C:\Program Files\LLVM" >> $GITHUB_ENV
+        echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
+
+    - name: Verify LLVM installation
+      run: |
+        llvm-config --version || true
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+
+    - name: Compile Release Binary
+      run: cargo build --release --locked
+
+    - name: Package Binary Asset (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        Compress-Archive -Path target/release/vajrac.exe -DestinationPath ${{ matrix.archive_name }}
+
+    - name: Package Binary Asset (Linux & macOS)
+      if: matrix.os != 'windows-latest'
+      run: |
+        tar -czvf ${{ matrix.archive_name }} -C target/release ${{ matrix.binary_name }}
+
+    - name: Upload Binary to GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{ matrix.archive_name }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

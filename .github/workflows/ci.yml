@@ -1,0 +1,61 @@
+name: Vajra Compiler Continuous Integration
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build & Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Rust Toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+
+    - name: Install LLVM & Clang (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y llvm-19-dev libclang-19-dev clang-19
+        echo "LLVM_SYS_191_PREFIX=/usr/lib/llvm-19" >> $GITHUB_ENV
+
+    - name: Install LLVM & Clang (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install llvm@19
+        echo "LLVM_SYS_191_PREFIX=$(brew --prefix llvm@19)" >> $GITHUB_ENV
+
+    - name: Install LLVM & Clang (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        choco install llvm -y --version=19.1.0
+        echo "LLVM_SYS_191_PREFIX=C:\Program Files\LLVM" >> $GITHUB_ENV
+        echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
+
+    - name: Verify LLVM installation
+      run: |
+        llvm-config --version || true
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+
+    - name: Cargo Check (Strict Warning-Free Verification)
+      run: cargo check --all-targets --all-features
+
+    - name: Cargo Clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Run Cargo Test
+      run: cargo test --all-features

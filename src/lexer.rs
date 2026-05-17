@@ -1,0 +1,299 @@
+use unicode_segmentation::UnicodeSegmentation;
+use std::collections::HashMap;
+use lazy_static::lazy_static;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenKind {
+    // Keywords
+    Function, // fn, कार्या, कार्य
+    Let,      // let, अस्तु, मान
+    Class,    // class, वर्ग, श्रेणी
+    If,       // if, यदि, चेत्
+    Else,     // else, अन्यथा, नोचेत्
+    Return,   // return, प्रतिफल, निवर्तय
+    Public,   // public, सार्वजनिक
+    Private,  // private, निजी, रहस्य
+    Protected, // protected, सुरक्षित
+    While,    // while, यावत्, जबतक
+    Try,      // try, प्रयत्न, प्रयास
+    Catch,    // catch, ग्रहण, पकड़ें
+    Throw,    // throw, त्यज, फेंकें
+    Import,   // import, आयात
+    
+    // Decorators
+    MainDecorator,   // @main
+    ExternDecorator, // @extern
+    
+    // Identifiers & Literals
+    Identifier(String),
+    Integer(i64),
+    Float(f64),
+    String(String),
+    
+    // Operators & Punctuation
+    Dot,        // .
+    Comma,      // ,
+    Semicolon,  // ;
+    LParen,     // (
+    RParen,     // )
+    LBrace,     // {
+    RBrace,     // }
+    Assign,     // =
+    Plus,       // +
+    Minus,      // -
+    Star,       // *
+    Slash,      // /
+    LessThan,   // <
+    GreaterThan,// >
+    Equal,      // ==
+    LessEqual,  // <=
+    GreaterEqual,// >=
+    
+    // Whitespace/Flow
+    Newline,
+    EOF,
+}
+
+lazy_static! {
+    static ref KEYWORDS: HashMap<&'static str, TokenKind> = {
+        let mut m = HashMap::new();
+        // English
+        m.insert("fn", TokenKind::Function);
+        m.insert("let", TokenKind::Let);
+        m.insert("class", TokenKind::Class);
+        m.insert("if", TokenKind::If);
+        m.insert("else", TokenKind::Else);
+        m.insert("return", TokenKind::Return);
+        m.insert("public", TokenKind::Public);
+        m.insert("private", TokenKind::Private);
+        m.insert("protected", TokenKind::Protected);
+        m.insert("while", TokenKind::While);
+        m.insert("try", TokenKind::Try);
+        m.insert("catch", TokenKind::Catch);
+        m.insert("throw", TokenKind::Throw);
+        m.insert("import", TokenKind::Import);
+        
+        // Sanskrit
+        m.insert("कार्या", TokenKind::Function);
+        m.insert("अस्तु", TokenKind::Let);
+        m.insert("वर्ग", TokenKind::Class);
+        m.insert("चेत्", TokenKind::If);
+        m.insert("नोचेत्", TokenKind::Else);
+        m.insert("निवर्तय", TokenKind::Return);
+        m.insert("सार्वजनिक", TokenKind::Public);
+        m.insert("रहस्य", TokenKind::Private);
+        m.insert("वैयक्तिक", TokenKind::Private);
+        m.insert("सुरक्षित", TokenKind::Protected);
+        m.insert("यावत्", TokenKind::While);
+        m.insert("प्रयत्न", TokenKind::Try);
+        m.insert("ग्रहण", TokenKind::Catch);
+        m.insert("त्यज", TokenKind::Throw);
+        m.insert("आयात", TokenKind::Import);
+        
+        // Hindi
+        m.insert("कार्य", TokenKind::Function);
+        m.insert("मान", TokenKind::Let);
+        m.insert("श्रेणी", TokenKind::Class);
+        m.insert("यदि", TokenKind::If);
+        m.insert("अन्यथा", TokenKind::Else);
+        m.insert("प्रतिफल", TokenKind::Return);
+        m.insert("निजी", TokenKind::Private);
+        m.insert("जबतक", TokenKind::While);
+        m.insert("प्रयास", TokenKind::Try);
+        m.insert("पकड़ें", TokenKind::Catch);
+        m.insert("फेंकें", TokenKind::Throw);
+        
+        m
+    };
+}
+
+#[derive(Debug, Clone)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub line: usize,
+    pub col: usize,
+}
+
+pub struct Lexer<'a> {
+    input: Vec<&'a str>,
+    pos: usize,
+    line: usize,
+    col: usize,
+}
+
+impl<'a> Lexer<'a> {
+    pub fn new(input: &'a str) -> Self {
+        let graphemes = UnicodeSegmentation::graphemes(input, true).collect();
+        Self {
+            input: graphemes,
+            pos: 0,
+            line: 1,
+            col: 1,
+        }
+    }
+
+    fn peek(&self) -> Option<&&'a str> {
+        self.input.get(self.pos)
+    }
+
+    fn advance(&mut self) -> Option<&&'a str> {
+        let res = self.input.get(self.pos);
+        if let Some(g) = res {
+            self.pos += 1;
+            if *g == "\n" {
+                self.line += 1;
+                self.col = 1;
+            } else {
+                self.col += 1;
+            }
+        }
+        res
+    }
+
+    pub fn next_token(&mut self) -> Token {
+        self.skip_whitespace();
+
+        let line = self.line;
+        let col = self.col;
+
+        let g = match self.advance() {
+            Some(g) => *g,
+            None => return Token { kind: TokenKind::EOF, line, col },
+        };
+
+        let kind = match g {
+            "@" => {
+                let id = self.read_identifier();
+                if id == "main" {
+                    TokenKind::MainDecorator
+                } else if id == "extern" {
+                    TokenKind::ExternDecorator
+                } else {
+                    panic!("Unknown decorator @{}", id);
+                }
+            }
+            "." => TokenKind::Dot,
+            "," => TokenKind::Comma,
+            ";" => TokenKind::Semicolon,
+            "(" => TokenKind::LParen,
+            ")" => TokenKind::RParen,
+            "{" => TokenKind::LBrace,
+            "}" => TokenKind::RBrace,
+            "=" => {
+                if let Some(&"=") = self.peek() {
+                    self.advance();
+                    TokenKind::Equal
+                } else {
+                    TokenKind::Assign
+                }
+            }
+            "<" => {
+                if let Some(&"=") = self.peek() {
+                    self.advance();
+                    TokenKind::LessEqual
+                } else {
+                    TokenKind::LessThan
+                }
+            }
+            ">" => {
+                if let Some(&"=") = self.peek() {
+                    self.advance();
+                    TokenKind::GreaterEqual
+                } else {
+                    TokenKind::GreaterThan
+                }
+            }
+            "+" => TokenKind::Plus,
+            "-" => TokenKind::Minus,
+            "*" => TokenKind::Star,
+            "/" => TokenKind::Slash,
+            "\n" => TokenKind::Newline,
+            _ if g.chars().next().unwrap().is_alphabetic() || g == "_" => {
+                let mut id = g.to_string();
+                id.push_str(&self.read_identifier());
+                if let Some(kw) = KEYWORDS.get(id.as_str()) {
+                    kw.clone()
+                } else {
+                    TokenKind::Identifier(id)
+                }
+            }
+            _ if g.chars().next().unwrap().is_numeric() => {
+                let mut num = g.to_string();
+                num.push_str(&self.read_number());
+                if num.contains('.') {
+                    TokenKind::Float(num.parse().unwrap())
+                } else {
+                    TokenKind::Integer(num.parse().unwrap())
+                }
+            }
+            "\"" => TokenKind::String(self.read_string()),
+            _ => panic!("Unexpected character: {} at line {}, col {}", g, line, col),
+        };
+
+        Token { kind, line, col }
+    }
+
+    fn read_identifier(&mut self) -> String {
+        let mut id = String::new();
+        while let Some(g) = self.peek() {
+            let c = g.chars().next().unwrap();
+            if c.is_alphanumeric() || *g == "_" {
+                id.push_str(self.advance().unwrap());
+            } else {
+                break;
+            }
+        }
+        id
+    }
+
+    fn read_number(&mut self) -> String {
+        let mut num = String::new();
+        while let Some(g) = self.peek() {
+            let c = g.chars().next().unwrap();
+            if c.is_numeric() || *g == "." {
+                num.push_str(self.advance().unwrap());
+            } else {
+                break;
+            }
+        }
+        num
+    }
+
+    fn read_string(&mut self) -> String {
+        let mut s = String::new();
+        while let Some(g) = self.advance() {
+            if *g == "\"" {
+                break;
+            }
+            s.push_str(g);
+        }
+        s
+    }
+
+    fn skip_whitespace(&mut self) {
+        loop {
+            let mut skipped = false;
+            while let Some(g) = self.peek() {
+                if *g == " " || *g == "\t" || *g == "\r" {
+                    self.advance();
+                    skipped = true;
+                } else {
+                    break;
+                }
+            }
+            if let Some(&"#") = self.peek() {
+                self.advance(); // consume '#'
+                while let Some(g) = self.peek() {
+                    if *g == "\n" {
+                        break;
+                    }
+                    self.advance();
+                }
+                skipped = true;
+            }
+            if !skipped {
+                break;
+            }
+        }
+    }
+}
