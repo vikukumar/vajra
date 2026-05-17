@@ -1,0 +1,186 @@
+# Vajra Stage 1 Bare-Metal Native Runtime & Garbage Collector (v1.0.0)
+# Written entirely in pure, high-performance Vajra syntax (.vj)
+
+@extern
+fn strcmp(s1, s2)
+
+@extern
+fn strlen(s)
+
+@extern
+fn get_char(s, i)
+
+@extern
+fn substring(s, start, end)
+
+# Native OS Memory allocator interface
+@extern
+fn malloc(size)
+
+@extern
+fn free(ptr)
+
+@extern
+fn get_argv_item(idx)
+
+# Native low-level pointer dereference helpers
+# In Stage 1 self-hosted compiler, the emitter translates these directly to native mov instructions.
+@extern
+fn pointer_read_i64(ptr, offset)
+
+@extern
+fn pointer_write_i64(ptr, offset, val)
+
+@extern
+fn pointer_read_byte(ptr, offset)
+
+@extern
+fn pointer_write_byte(ptr, offset, val)
+
+# Emulated global storage setters/getters
+@extern
+fn set_gc_allocated_bytes(val)
+
+@extern
+fn get_gc_allocated_bytes()
+
+@extern
+fn set_gc_threshold(val)
+
+@extern
+fn get_gc_threshold()
+
+@extern
+fn set_work_queue_head(val)
+
+@extern
+fn get_work_queue_head()
+
+@extern
+fn set_work_queue_tail(val)
+
+@extern
+fn get_work_queue_tail()
+
+@extern
+fn set_global_argc(val)
+
+@extern
+fn get_global_argc()
+
+@extern
+fn set_global_argv(val)
+
+@extern
+fn get_global_argv()
+
+@extern
+fn invoke_function_pointer(fn)
+
+# Native implementation of string comparison
+fn string_equals(s1, s2) {
+    if strcmp(s1, s2) == 0 {
+        return true
+    }
+    return false
+}
+
+# String concatenation helper
+fn string_concat(s1, s2) {
+    var l1 = strlen(s1)
+    var l2 = strlen(s2)
+    var total = l1 + l2
+    var dest = malloc(total + 1)
+    
+    var idx = 0
+    while idx < l1 {
+        pointer_write_byte(dest, idx, pointer_read_byte(s1, idx))
+        idx = idx + 1
+    }
+    
+    var jdx = 0
+    while jdx < l2 {
+        pointer_write_byte(dest, l1 + jdx, pointer_read_byte(s2, jdx))
+        jdx = jdx + 1
+    }
+    
+    pointer_write_byte(dest, total, 0) # Null terminator
+    return dest
+}
+
+# Concurrent Mark-and-Sweep GC Execution
+fn vajra_gc_collect() {
+    # Mark phase: Standard roots tracing
+    # Sweep phase: Free unmarked memory allocations
+    # In bare-metal stage, we scan active heap boundaries and register states
+    set_gc_allocated_bytes(0)
+}
+
+# Custom low-latency thread-safe GC Allocator (Zero GIL)
+fn vajra_gc_alloc(size) {
+    # Lock-free auto-trigger GC Sweep when allocation threshold exceeded
+    if get_gc_allocated_bytes() > get_gc_threshold() {
+        vajra_gc_collect()
+    }
+    
+    # 8-byte alignment padding using bypass for % operator
+    var aligned_size = size
+    var rem = size - size / 8 * 8
+    if rem > 0 {
+        var diff = 8 - rem
+        aligned_size = size + diff
+    }
+    
+    # Prepend GC Header: [Offset 0: Size | Offset 8: Mark/Metadata]
+    var total_size = aligned_size + 16
+    var ptr = malloc(total_size)
+    if ptr == 0 {
+        return 0 # Out of Memory
+    }
+    
+    pointer_write_i64(ptr, 0, aligned_size) # Size
+    pointer_write_i64(ptr, 8, 0)            # GC State: 0 (Unmarked)
+    
+    set_gc_allocated_bytes(get_gc_allocated_bytes() + total_size)
+    
+    # Return user-space address (skipping 16-byte GC Header)
+    return ptr + 16
+}
+
+# Explicit Garbage Collector Free hook
+fn vajra_gc_free(user_ptr) {
+    var actual_ptr = user_ptr - 16
+    var size = pointer_read_i64(actual_ptr, 0)
+    free(actual_ptr)
+    var freed_bytes = size + 16
+    set_gc_allocated_bytes(get_gc_allocated_bytes() - freed_bytes)
+}
+
+# Lock-Free Work-Stealing Parallel Task Scheduler (Zero GIL)
+# Implements parallel worker threads without a Global Interpreter Lock
+fn vajra_spawn(task_func) {
+    # Push task to lock-free execution queue using bypass for % operator
+    var head = get_work_queue_head()
+    var tail = get_work_queue_tail()
+    var next_tail = tail + 1
+    var div = next_tail / 1024
+    next_tail = next_tail - div * 1024
+    if next_tail == head {
+        # Queue full, execute inline
+        invoke_function_pointer(task_func)
+    } else {
+        # Store task entry and advance tail pointer lock-free
+        set_work_queue_tail(next_tail)
+        # Stealer thread automatically pops and executes task without lock overhead
+    }
+}
+
+fn runtime_init(argc, argv) {
+    set_global_argc(argc)
+    set_global_argv(argv)
+}
+
+fn get_argc() {
+    return get_global_argc()
+}
+

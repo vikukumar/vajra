@@ -1,0 +1,289 @@
+# Vajra Stage 1 Project Manifest Engine (v1.0.0)
+# Written entirely in pure, high-performance Vajra syntax (.vj)
+
+@extern
+fn strcmp(s1, s2)
+
+@extern
+fn strlen(s)
+
+@extern
+fn get_char(s, i)
+
+@extern
+fn substring(s, start, end)
+
+@extern
+fn read_file_content(path)
+
+@extern
+fn get_newline_char()
+
+@extern
+fn get_quote_char()
+
+@extern
+fn get_tab_char()
+
+@extern
+fn get_cr_char()
+
+@extern
+fn is_space(c)
+
+# Emulated global storage setters/getters
+@extern
+fn set_manifest_name(val)
+
+@extern
+fn get_manifest_name_val()
+
+@extern
+fn set_manifest_version(val)
+
+@extern
+fn get_manifest_version_val()
+
+@extern
+fn set_manifest_target(val)
+
+@extern
+fn get_manifest_target_val()
+
+@extern
+fn set_manifest_entry(val)
+
+@extern
+fn get_manifest_entry_val()
+
+
+fn trim(s) {
+    var len = strlen(s)
+    var start = 0
+    var end = len
+    
+    var loop1 = true
+    while loop1 {
+        if start < len {
+            if is_space(get_char(s, start)) {
+                start = start + 1
+            } else {
+                loop1 = false
+            }
+        } else {
+            loop1 = false
+        }
+    }
+    
+    var loop2 = true
+    while loop2 {
+        if end > start {
+            if is_space(get_char(s, end - 1)) {
+                end = end - 1
+            } else {
+                loop2 = false
+            }
+        } else {
+            loop2 = false
+        }
+    }
+    
+    return substring(s, start, end)
+}
+
+fn parse_json_manifest(content) {
+    var len = strlen(content)
+    var idx = 0
+    var quote = get_quote_char()
+    
+    while idx < len {
+        var c = get_char(content, idx)
+        if strcmp(c, quote) == 0 {
+            # Extract key
+            var start_key = idx + 1
+            idx = idx + 1
+            var key_loop = true
+            while key_loop {
+                if idx < len {
+                    if strcmp(get_char(content, idx), quote) == 0 {
+                        key_loop = false
+                    } else {
+                        idx = idx + 1
+                    }
+                } else {
+                    key_loop = false
+                }
+            }
+            var key = substring(content, start_key, idx)
+            idx = idx + 1 # skip closing quote
+            
+            # Find colon
+            var colon_loop = true
+            while colon_loop {
+                if idx < len {
+                    if strcmp(get_char(content, idx), ":") == 0 {
+                        colon_loop = false
+                    }
+                } else {
+                    colon_loop = false
+                }
+                idx = idx + 1
+            }
+            
+            # Find value
+            var val_loop = true
+            while val_loop {
+                if idx < len {
+                    var vc = get_char(content, idx)
+                    if is_space(vc) {
+                        idx = idx + 1
+                    } else {
+                        val_loop = false
+                    }
+                } else {
+                    val_loop = false
+                }
+            }
+            
+            # If value is string
+            if strcmp(get_char(content, idx), quote) == 0 {
+                var start_val = idx + 1
+                idx = idx + 1
+                var val_str_loop = true
+                while val_str_loop {
+                    if idx < len {
+                        if strcmp(get_char(content, idx), quote) == 0 {
+                            val_str_loop = false
+                        } else {
+                            idx = idx + 1
+                        }
+                    } else {
+                        val_str_loop = false
+                    }
+                }
+                var val = substring(content, start_val, idx)
+                idx = idx + 1 # skip closing quote
+                
+                # Assign manifest attributes
+                if strcmp(key, "name") == 0 { set_manifest_name(val) }
+                if strcmp(key, "version") == 0 { set_manifest_version(val) }
+                if strcmp(key, "target") == 0 { set_manifest_target(val) }
+                if strcmp(key, "entry") == 0 { set_manifest_entry(val) }
+            }
+        }
+        idx = idx + 1
+    }
+}
+
+fn parse_yaml_manifest(content) {
+    var len = strlen(content)
+    var idx = 0
+    var quote = get_quote_char()
+    var nl = get_newline_char()
+    
+    while idx < len {
+        # Skip leading newlines and whitespace
+        var c = get_char(content, idx)
+        if is_space(c) {
+            idx = idx + 1
+        } else {
+            # Read single YAML line: key: value
+            var start_line = idx
+            var line_loop = true
+            while line_loop {
+                if idx < len {
+                    if strcmp(get_char(content, idx), nl) == 0 {
+                        line_loop = false
+                    } else {
+                        idx = idx + 1
+                    }
+                } else {
+                    line_loop = false
+                }
+            }
+            var line = substring(content, start_line, idx)
+            idx = idx + 1 # skip newline
+            
+            # Parse key: value from line
+            var line_len = strlen(line)
+            var jdx = 0
+            var found_colon = false
+            var colon_pos = 0
+            while jdx < line_len {
+                if strcmp(get_char(line, jdx), ":") == 0 {
+                    found_colon = true
+                    colon_pos = jdx
+                    jdx = line_len # break
+                }
+                jdx = jdx + 1
+            }
+            
+            if found_colon {
+                var key_raw = substring(line, 0, colon_pos)
+                var val_raw = substring(line, colon_pos + 1, line_len)
+                
+                # Trim key and val
+                var key = trim(key_raw)
+                var val = trim(val_raw)
+                
+                # Strip quotes if string literal
+                var val_len = strlen(val)
+                if val_len > 1 {
+                    if strcmp(get_char(val, 0), quote) == 0 {
+                        if strcmp(get_char(val, val_len - 1), quote) == 0 {
+                            val = substring(val, 1, val_len - 1)
+                        }
+                    }
+                }
+                
+                # Store
+                if strcmp(key, "name") == 0 { set_manifest_name(val) }
+                if strcmp(key, "version") == 0 { set_manifest_version(val) }
+                if strcmp(key, "target") == 0 { set_manifest_target(val) }
+                if strcmp(key, "entry") == 0 { set_manifest_entry(val) }
+            }
+        }
+    }
+}
+
+# Native JSON & YAML parser
+fn parse_project_manifest(filepath) {
+    var content = read_file_content(filepath)
+    var len = strlen(content)
+    if len == 0 {
+        return false
+    }
+    
+    # Simple JSON/YAML auto-detector
+    var is_json = false
+    var i = 0
+    var found_brace = false
+    while i < len {
+        var c = get_char(content, i)
+        if is_space(c) {
+            # continue
+        } else {
+            if strcmp(c, "{") == 0 {
+                is_json = true
+                found_brace = true
+                len = i # break
+            } else {
+                found_brace = true
+                len = i # break
+            }
+        }
+        i = i + 1
+    }
+    
+    if is_json {
+        parse_json_manifest(content)
+    } else {
+        parse_yaml_manifest(content)
+    }
+    return true
+}
+
+fn get_manifest_name() { return get_manifest_name_val() }
+fn get_manifest_version() { return get_manifest_version_val() }
+fn get_manifest_target() { return get_manifest_target_val() }
+fn get_manifest_entry() { return get_manifest_entry_val() }

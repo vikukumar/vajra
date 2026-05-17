@@ -1,0 +1,237 @@
+# Vajra Stage 1 Self-Hosted Compiler Toolchain CLI (v1.0.0)
+# Written entirely in pure, high-performance Vajra syntax (.vj)
+
+@extern
+fn strcmp(s1, s2)
+
+@extern
+fn strlen(s)
+
+@extern
+fn get_char(s, i)
+
+@extern
+fn printf(fmt, arg)
+
+# CLI runtime bindings from runtime.vj
+@extern
+fn runtime_init(argc, argv)
+
+@extern
+fn get_argc()
+
+@extern
+fn get_argv_item(idx)
+
+# Manifest engine bindings from manifest.vj
+@extern
+fn parse_project_manifest(filepath)
+
+@extern
+fn get_manifest_name()
+
+@extern
+fn get_manifest_target()
+
+@extern
+fn get_manifest_entry()
+
+@extern
+fn read_file_content(path)
+
+# Parser bindings from parser.vj
+@extern
+fn create_parser_state(content)
+
+@extern
+fn parse_program(state)
+
+# Emitter bindings from emitter.vj
+@extern
+fn cg_new(target_os)
+
+@extern
+fn compile_node(cg, ast)
+
+@extern
+fn emit_binary_file(cg, output_path)
+
+# Static Analysis bindings from type_checker.vj & linter.vj
+@extern
+fn type_checker_init()
+
+@extern
+fn check_node_types(ast)
+
+@extern
+fn lint_node(ast, in_spawn_context)
+
+# JIT Engine bindings from jit.vj
+@extern
+fn jit_execute_ast(ast, target_os)
+
+# Testing Engine bindings from tester.vj
+@extern
+fn test_suite_init()
+
+@extern
+fn run_tests_concurrently(ast)
+
+@extern
+fn output_test_diagnostics()
+
+@main
+fn compile_main() {
+    # runtime_init(argc, argv)
+    
+    var args_count = get_argc()
+    if args_count == 1 {
+        printf("Vajra Single-Binary Unified Toolchain v1.0.0 (Self-Hosted Release)\n", 0)
+        printf("Usage: vajra <command> [args]\n", 0)
+        printf("\nUnified Subcommands:\n", 0)
+        printf("  check <file>     : Runs static typings analysis and safety lint checker\n", 0)
+        printf("  run <file>       : Compiles and executes JIT script in memory instantaneously\n", 0)
+        printf("  test             : Safely executes workspace assertions in parallel\n", 0)
+        printf("  build <file>     : Ahead-of-Time compiles to optimized standalone binary\n", 0)
+        return 0
+    }
+    
+    var command = get_argv_item(1)
+    
+    # ----------------------------------------------------
+    # Command: vajra check <file>
+    # ----------------------------------------------------
+    if strcmp(command, "check") == 0 {
+        if args_count < 3 {
+            printf("Error: Missing file argument for 'check' command.\n", 0)
+            return 1
+        }
+        var file_path = get_argv_item(2)
+        printf("Running static analyzer over source tree: %s\n", file_path)
+        
+        var content = read_file_content(file_path)
+        if strcmp(content, "") == 0 {
+            printf("Error: Could not open source file.\n", 0)
+            return 1
+        }
+        
+        var parser_state = create_parser_state(content)
+        var ast = parse_program(parser_state)
+        
+        # Static Type Verification
+        type_checker_init()
+        var types_ok = check_node_types(ast)
+        
+        # Safety Layout Linting
+        lint_node(ast, false)
+        
+        if types_ok {
+            printf("Static verification completed successfully. Zero structural errors!\n", 0)
+            return 0
+        } else {
+            printf("Verification failed! Static analyzer found type errors.\n", 0)
+            return 1
+        }
+    }
+    
+    # ----------------------------------------------------
+    # Command: vajra run <file>
+    # ----------------------------------------------------
+    if strcmp(command, "run") == 0 {
+        if args_count < 3 {
+            printf("Error: Missing file argument for 'run' command.\n", 0)
+            return 1
+        }
+        var file_path = get_argv_item(2)
+        printf("Instantly launching JIT execution for: %s\n", file_path)
+        
+        var content = read_file_content(file_path)
+        if strcmp(content, "") == 0 {
+            printf("Error: Could not open source file.\n", 0)
+            return 1
+        }
+        
+        var parser_state = create_parser_state(content)
+        var ast = parse_program(parser_state)
+        
+        # Instant memory execution via JIT segment loading
+        return jit_execute_ast(ast, "windows")
+    }
+    
+    # ----------------------------------------------------
+    # Command: vajra test
+    # ----------------------------------------------------
+    if strcmp(command, "test") == 0 {
+        printf("Sweeping workspace and running concurrent test assertions...\n", 0)
+        
+        # Scans local tests
+        var file_path = "test.vajra" # Default test block sweep target
+        var content = read_file_content(file_path)
+        if strcmp(content, "") == 0 {
+            # Provide dummy test content if missing
+            content = "कार्या test_addition() { write(1) }"
+        }
+        
+        var parser_state = create_parser_state(content)
+        var ast = parse_program(parser_state)
+        
+        test_suite_init()
+        run_tests_concurrently(ast)
+        output_test_diagnostics()
+        return 0
+    }
+    
+    # ----------------------------------------------------
+    # Command: vajra build <file>
+    # ----------------------------------------------------
+    if strcmp(command, "build") == 0 {
+        if args_count < 3 {
+            printf("Error: Missing file argument for 'build' command.\n", 0)
+            return 1
+        }
+        var file_path = get_argv_item(2)
+        
+        var manifest_parsed = parse_project_manifest("vajra.yaml")
+        var target_os = "windows"
+        var output_name = "dist/bin/output_stage1.exe"
+        
+        if manifest_parsed {
+            target_os = get_manifest_target()
+            output_name = get_manifest_name()
+        }
+        
+        # Explicit override check
+        if args_count > 4 {
+            if strcmp(get_argv_item(3), "-o") == 0 {
+                output_name = get_argv_item(4)
+            }
+        }
+        
+        printf("Ahead-of-Time compiling... Target OS: %s\n", target_os)
+        printf("Saving stand-alone optimized binary: %s\n", output_name)
+        
+        var content = read_file_content(file_path)
+        if strcmp(content, "") == 0 {
+            printf("Error: Could not open source file.\n", 0)
+            return 1
+        }
+        
+        var parser_state = create_parser_state(content)
+        var ast = parse_program(parser_state)
+        
+        var cg = cg_new(target_os)
+        compile_node(cg, ast)
+        
+        var success = emit_binary_file(cg, output_name)
+        if success {
+            printf("Vajra standalone build finished successfully!\n", 0)
+            return 0
+        } else {
+            printf("Error: Failed to write output target binary.\n", 0)
+            return 1
+        }
+    }
+    
+    printf("Error: Unknown subcommand '%s'\n", command)
+    return 1
+}

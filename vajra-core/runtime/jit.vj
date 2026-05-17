@@ -1,0 +1,74 @@
+# Vajra Stage 1 Just-In-Time (JIT) Dynamic Execution Engine (v1.0.0)
+# Written entirely in pure, high-performance Vajra syntax (.vj)
+
+@extern
+fn strcmp(s1, s2)
+
+@extern
+fn printf(fmt, arg)
+
+@extern
+fn malloc(size)
+
+@extern
+fn free(ptr)
+
+@extern
+fn pointer_read_i64(ptr, offset)
+
+# Emitter dynamic compiler bindings from emitter.vj
+@extern
+fn cg_new(target_os)
+
+@extern
+fn compile_node(cg, ast)
+
+# JIT Volatile Executable caller
+# In Stage 1 self-hosted output, the emitter lowers this to: mov rax, rcx; call rax; ret
+@extern
+fn call_executable_memory(address)
+
+# OS page execute permissions modifier
+# Windows VirtualProtect: VirtualProtect(ptr, size, PAGE_EXECUTE_READWRITE [0x40], &oldProtect)
+# Linux mprotect: mprotect(ptr, size, PROT_READ | PROT_WRITE | PROT_EXEC [0x07])
+@extern
+fn VirtualProtect(lpAddress, dwSize, flNewProtect, lpflOldProtect)
+
+@extern
+fn mprotect(addr, len, prot)
+
+fn jit_execute_ast(ast, target_os) {
+    printf("Initializing Just-In-Time memory compilation...\n", 0)
+    
+    # 1. Ahead-of-Time JIT compilation in memory
+    var cg = cg_new(target_os)
+    compile_node(cg, ast)
+    
+    var buf = pointer_read_i64(cg, 1)
+    var size = pointer_read_i64(cg, 2)
+    
+    if size == 0 {
+        printf("JIT Warning: Emitted executable segment is empty.\n", 0)
+        return 1
+    }
+    
+    printf("Configuring page permissions for executable memory segment... Size: %lld bytes\n", size)
+    
+    # 2. Modify virtual memory page permissions to allow Execution
+    var old_protect = malloc(8)
+    if strcmp(target_os, "windows") == 0 {
+        # flNewProtect = PAGE_EXECUTE_READWRITE (0x40)
+        VirtualProtect(buf, size, 64, old_protect)
+    } else {
+        # prot = PROT_READ | PROT_WRITE | PROT_EXEC (0x07)
+        mprotect(buf, size, 7)
+    }
+    free(old_protect)
+    
+    # 3. Direct execution leap into JIT volatile segment
+    printf("Executing compiled volatile memory block natively...\n", 0)
+    call_executable_memory(buf)
+    
+    printf("JIT Execution completed successfully!\n", 0)
+    return 0
+}

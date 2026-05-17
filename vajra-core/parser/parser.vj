@@ -1,0 +1,431 @@
+# Vajra Stage 1 Polyglot Syntax Parsing Engine (v1.0.0)
+# Written entirely in pure, high-performance Vajra syntax (.vj)
+
+@extern
+fn strcmp(s1, s2)
+
+@extern
+fn strlen(s)
+
+@extern
+fn get_char(s, i)
+
+@extern
+fn substring(s, start, end)
+
+@extern
+fn get_newline_char()
+
+@extern
+fn malloc(size)
+
+@extern
+fn free(ptr)
+
+@extern
+fn pointer_read_i64(ptr, offset)
+
+@extern
+fn pointer_write_i64(ptr, offset, val)
+
+# External tokenizer functions from lexer.vj
+@extern
+fn lex_next_token(input, pos)
+
+@extern
+fn skip_whitespace_and_comments(input, pos)
+
+# Unified AST Node Property Manager
+# Offset 0: Type | Offset 1: Name | Offset 2: Value | Offset 3: Op | Offset 4: Left | Offset 5: Right
+# Offset 6: Body | Offset 7: Body Size | Offset 8: Body Cap | Offset 9: Args | Offset 10: Args Size | Offset 11: Args Cap
+fn ast_new(type) {
+    var node = malloc(96)
+    pointer_write_i64(node, 0, type)  # Type
+    pointer_write_i64(node, 1, 0)     # Name
+    pointer_write_i64(node, 2, 0)     # Value
+    pointer_write_i64(node, 3, 0)     # Op
+    pointer_write_i64(node, 4, 0)     # Left
+    pointer_write_i64(node, 5, 0)     # Right
+    
+    # Pre-allocate body array (cap 64)
+    var body = malloc(512)
+    pointer_write_i64(node, 6, body)
+    pointer_write_i64(node, 7, 0)     # Size
+    pointer_write_i64(node, 8, 64)    # Cap
+    
+    # Pre-allocate args array (cap 64)
+    var args = malloc(512)
+    pointer_write_i64(node, 9, args)
+    pointer_write_i64(node, 10, 0)    # Size
+    pointer_write_i64(node, 11, 64)   # Cap
+    
+    return node
+}
+
+fn ast_get_type(node) { return pointer_read_i64(node, 0) }
+fn ast_set_type(node, val) { pointer_write_i64(node, 0, val) }
+
+fn ast_get_name(node) { return pointer_read_i64(node, 1) }
+fn ast_set_name(node, val) { pointer_write_i64(node, 1, val) }
+
+fn ast_get_value(node) { return pointer_read_i64(node, 2) }
+fn ast_set_value(node, val) { pointer_write_i64(node, 2, val) }
+
+fn ast_get_op(node) { return pointer_read_i64(node, 3) }
+fn ast_set_op(node, val) { pointer_write_i64(node, 3, val) }
+
+fn ast_get_left(node) { return pointer_read_i64(node, 4) }
+fn ast_set_left(node, val) { pointer_write_i64(node, 4, val) }
+
+fn ast_get_right(node) { return pointer_read_i64(node, 5) }
+fn ast_set_right(node, val) { pointer_write_i64(node, 5, val) }
+
+fn ast_get_body_size(node) { return pointer_read_i64(node, 7) }
+fn ast_get_body_item(node, idx) {
+    var body = pointer_read_i64(node, 6)
+    return pointer_read_i64(body, idx)
+}
+fn ast_push_body(node, item) {
+    var body = pointer_read_i64(node, 6)
+    var size = pointer_read_i64(node, 7)
+    pointer_write_i64(body, size, item)
+    pointer_write_i64(node, 7, size + 1)
+}
+
+fn ast_get_args_size(node) { return pointer_read_i64(node, 10) }
+fn ast_get_args_item(node, idx) {
+    var args = pointer_read_i64(node, 9)
+    return pointer_read_i64(args, idx)
+}
+fn ast_push_arg(node, item) {
+    var args = pointer_read_i64(node, 9)
+    var size = pointer_read_i64(node, 10)
+    pointer_write_i64(args, size, item)
+    pointer_write_i64(node, 10, size + 1)
+}
+
+# Parser state: [Offset 0: Content | Offset 8: Length | Offset 16: Pos | Offset 24: CurKind | Offset 32: CurVal | Offset 40: PeekKind | Offset 48: PeekVal]
+fn parser_get_cur_kind(state) { return pointer_read_i64(state, 3) }
+fn parser_get_cur_val(state) { return pointer_read_i64(state, 4) }
+fn parser_get_peek_kind(state) { return pointer_read_i64(state, 5) }
+fn parser_get_peek_val(state) { return pointer_read_i64(state, 6) }
+
+fn parser_advance(state) {
+    var content = pointer_read_i64(state, 0)
+    var len = pointer_read_i64(state, 1)
+    var pos = pointer_read_i64(state, 2)
+    
+    # Store peek token as current token
+    pointer_write_i64(state, 3, pointer_read_i64(state, 5)) # CurKind = PeekKind
+    pointer_write_i64(state, 4, pointer_read_i64(state, 6)) # CurVal = PeekVal
+    
+    # Fetch next token as peek token using % bypass
+    if pos >= len {
+        pointer_write_i64(state, 5, 1)  # PeekKind = EOF
+        pointer_write_i64(state, 6, 0)  # PeekVal = ""
+    } else {
+        var packed = lex_next_token(content, pos)
+        var kind = packed - packed / 256 * 256
+        var tok_len = packed / 256
+        
+        # Advance internal parser position past whitespace
+        var next_pos = skip_whitespace_and_comments(content, pos)
+        pointer_write_i64(state, 5, kind)
+        pointer_write_i64(state, 6, substring(content, next_pos, next_pos + tok_len))
+        pointer_write_i64(state, 2, next_pos + tok_len)
+    }
+}
+
+fn create_parser_state(content) {
+    var state = malloc(56)
+    pointer_write_i64(state, 0, content)
+    pointer_write_i64(state, 1, strlen(content))
+    pointer_write_i64(state, 2, 0)
+    
+    parser_advance(state)
+    parser_advance(state)
+    return state
+}
+
+fn parser_skip_newlines(state) {
+    var loop = true
+    while loop {
+        var kind = parser_get_cur_kind(state)
+        if kind == 2 { # Newline
+            parser_advance(state)
+        } else {
+            loop = false
+        }
+    }
+}
+
+# Combined Recursive Precedence Climber
+# If is_primary is true, parses primary tokens (Literals, Calls, Identifiers).
+# If is_primary is false, parses complete binary expressions.
+fn parse_expression(state, is_primary) {
+    if is_primary {
+        var kind = parser_get_cur_kind(state)
+        var val = parser_get_cur_val(state)
+        
+        # String Literal
+        if kind == 3 {
+            parser_advance(state)
+            var node = ast_new("Literal")
+            ast_set_value(node, val)
+            return node
+        }
+        
+        # Number Literal
+        if kind == 4 {
+            parser_advance(state)
+            var node = ast_new("Literal")
+            ast_set_value(node, val)
+            return node
+        }
+        
+        # Auto-detected Print Call Intrinsic (print / likho / mudrit)
+        if kind == 300 {
+            parser_advance(state) # skip keyword
+            var node = ast_new("PrintCall")
+            
+            if parser_get_cur_kind(state) == 31 { # LParen '('
+                parser_advance(state)
+                var arg_loop = true
+                while arg_loop {
+                    if parser_get_cur_kind(state) == 32 { # RParen ')'
+                        arg_loop = false
+                    } else {
+                        var arg = parse_expression(state, 0)
+                        ast_push_arg(node, arg)
+                        if parser_get_cur_kind(state) == 38 { # Comma ','
+                            parser_advance(state)
+                        }
+                    }
+                }
+                parser_advance(state) # skip ')'
+            }
+            return node
+        }
+        
+        # Identifier or standard FunctionCall
+        if kind == 5 {
+            parser_advance(state)
+            
+            # Check if it is a function call
+            if parser_get_cur_kind(state) == 31 { # LParen '('
+                parser_advance(state)
+                var node = ast_new("FunctionCall")
+                ast_set_name(node, val)
+                
+                var arg_loop = true
+                while arg_loop {
+                    if parser_get_cur_kind(state) == 32 { # RParen ')'
+                        arg_loop = false
+                    } else {
+                        var arg = parse_expression(state, 0)
+                        ast_push_arg(node, arg)
+                        if parser_get_cur_kind(state) == 38 { # Comma ','
+                            parser_advance(state)
+                        }
+                    }
+                }
+                parser_advance(state) # skip ')'
+                return node
+            }
+            
+            var node = ast_new("Identifier")
+            ast_set_name(node, val)
+            return node
+        }
+        
+        # Skip any invalid primary tokens to prevent loops
+        parser_advance(state)
+        return 0
+    } else {
+        var left = parse_expression(state, 1)
+        
+        var loop = true
+        while loop {
+            var kind = parser_get_cur_kind(state)
+            
+            # Binary Operations: +, -, *, /, <, >, ==, <=, >=
+            if kind >= 41 {
+                if kind <= 49 {
+                    var op = parser_get_cur_val(state)
+                    parser_advance(state)
+                    
+                    var right = parse_expression(state, 1)
+                    var bin_node = ast_new("BinaryOp")
+                    ast_set_op(bin_node, op)
+                    ast_set_left(bin_node, left)
+                    ast_set_right(bin_node, right)
+                    left = bin_node
+                } else {
+                    loop = false
+                }
+            } else {
+                loop = false
+            }
+        }
+        return left
+    }
+}
+
+# Polyglot Statement parsing logic
+fn parse_statement(state) {
+    parser_skip_newlines(state)
+    var kind = parser_get_cur_kind(state)
+    
+    # Optional Semicolon parsing
+    if kind == 37 { # Semicolon
+        parser_advance(state)
+        return 0
+    }
+    
+    # Variable declarations (Let / Const / Var / अस्तु / मान)
+    if kind == 6 {
+        parser_advance(state)
+        var name = parser_get_cur_val(state)
+        parser_advance(state) # skip identifier
+        
+        var node = ast_new("Let")
+        ast_set_name(node, name)
+        
+        if parser_get_cur_kind(state) == 40 { # Assign '='
+            parser_advance(state)
+            var expr = parse_expression(state, 0)
+            ast_set_left(node, expr)
+        }
+        return node
+    }
+    
+    # Functions (fn / def / function / कार्या / कार्य)
+    if kind == 50 {
+        parser_advance(state)
+        var name = parser_get_cur_val(state)
+        parser_advance(state) # skip name
+        
+        var node = ast_new("Function")
+        ast_set_name(node, name)
+        
+        # Parse params
+        if parser_get_cur_kind(state) == 31 { # LParen '('
+            parser_advance(state)
+            var param_loop = true
+            while param_loop {
+                var pk = parser_get_cur_kind(state)
+                if pk == 32 { # RParen ')'
+                    param_loop = false
+                } else {
+                    if pk == 5 { # Identifier
+                        # Standard param parsing (simplifying to ignore type signatures for dynamic Vajra)
+                        parser_advance(state)
+                    }
+                    if parser_get_cur_kind(state) == 38 { # Comma ','
+                        parser_advance(state)
+                    }
+                }
+            }
+            parser_advance(state) # skip ')'
+        }
+        
+        # Parse function body
+        parser_skip_newlines(state)
+        if parser_get_cur_kind(state) == 33 { # LBrace '{'
+            parser_advance(state)
+            var body_loop = true
+            while body_loop {
+                parser_skip_newlines(state)
+                if parser_get_cur_kind(state) == 34 { # RBrace '}'
+                    body_loop = false
+                } else {
+                    if parser_get_cur_kind(state) == 1 { # EOF
+                        body_loop = false
+                    } else {
+                        var stmt = parse_statement(state)
+                        if stmt == 0 {
+                            # do nothing
+                        } else {
+                            ast_push_body(node, stmt)
+                        }
+                    }
+                }
+            }
+            parser_advance(state) # skip '}'
+        }
+        return node
+    }
+    
+    # Return statement
+    if kind == 10 {
+        parser_advance(state)
+        var node = ast_new("Return")
+        var expr = parse_expression(state, 0)
+        ast_set_left(node, expr)
+        return node
+    }
+    
+    # While loop (while / yaavat / जबतक)
+    if kind == 14 {
+        parser_advance(state)
+        var node = ast_new("While")
+        
+        # Parse loop condition
+        var cond = parse_expression(state, 0)
+        ast_set_left(node, cond)
+        
+        # Parse body
+        parser_skip_newlines(state)
+        if parser_get_cur_kind(state) == 33 { # '{'
+            parser_advance(state)
+            var body_loop = true
+            while body_loop {
+                parser_skip_newlines(state)
+                if parser_get_cur_kind(state) == 34 { # '}'
+                    body_loop = false
+                } else {
+                    var stmt = parse_statement(state)
+                    if stmt == 0 {
+                        # do nothing
+                    } else {
+                        ast_push_body(node, stmt)
+                    }
+                }
+            }
+            parser_advance(state) # skip '}'
+        }
+        return node
+    }
+    
+    # Standard Expression statement
+    var expr = parse_expression(state, 0)
+    if expr == 0 {
+        # do nothing
+    } else {
+        var node = ast_new("ExpressionStatement")
+        ast_set_left(node, expr)
+        return node
+    }
+    return 0
+}
+
+# Main Ast Program collector
+fn parse_program(state) {
+    var prog = ast_new("Program")
+    var loop = true
+    while loop {
+        parser_skip_newlines(state)
+        var kind = parser_get_cur_kind(state)
+        if kind == 1 { # EOF
+            loop = false
+        } else {
+            var stmt = parse_statement(state)
+            if stmt == 0 {
+                # do nothing
+            } else {
+                ast_push_body(prog, stmt)
+            }
+        }
+    }
+    return prog
+}

@@ -1,0 +1,342 @@
+# Vajra Stage 1 Universal Multi-lingual UTF-8 Tokenizer (v1.0.0)
+# Written entirely in pure, high-performance Vajra syntax (.vj)
+
+@extern
+fn strcmp(s1, s2)
+
+@extern
+fn strlen(s)
+
+@extern
+fn get_char(s, i)
+
+@extern
+fn substring(s, start, end)
+
+@extern
+fn get_newline_char()
+
+@extern
+fn get_tab_char()
+
+@extern
+fn get_cr_char()
+
+@extern
+fn get_quote_char()
+
+# Intrinsic Auto-Detector matching multilingual keywords to unified token kinds
+fn get_keyword_kind(id) {
+    # Function Definition
+    if strcmp(id, "fn") == 0 { return 50 }
+    if strcmp(id, "कार्या") == 0 { return 50 }
+    if strcmp(id, "कार्य") == 0 { return 50 }
+    if strcmp(id, "def") == 0 { return 50 }
+    if strcmp(id, "function") == 0 { return 50 }
+    
+    # Variable bindings (Let / Const / Var)
+    if strcmp(id, "let") == 0 { return 6 }
+    if strcmp(id, "अस्तु") == 0 { return 6 }
+    if strcmp(id, "मान") == 0 { return 6 }
+    if strcmp(id, "const") == 0 { return 6 }
+    if strcmp(id, "var") == 0 { return 6 }
+    
+    # Classes & OOP structure
+    if strcmp(id, "class") == 0 { return 7 }
+    if strcmp(id, "वर्ग") == 0 { return 7 }
+    if strcmp(id, "श्रेणी") == 0 { return 7 }
+    
+    # Conditionals
+    if strcmp(id, "if") == 0 { return 8 }
+    if strcmp(id, "यदि") == 0 { return 8 }
+    if strcmp(id, "चेत्") == 0 { return 8 }
+    
+    if strcmp(id, "else") == 0 { return 9 }
+    if strcmp(id, "अन्यथा") == 0 { return 9 }
+    if strcmp(id, "नोचेत्") == 0 { return 9 }
+    if strcmp(id, "elif") == 0 { return 9 }
+    
+    # Loops
+    if strcmp(id, "while") == 0 { return 14 }
+    if strcmp(id, "यावत्") == 0 { return 14 }
+    if strcmp(id, "जबतक") == 0 { return 14 }
+    
+    if strcmp(id, "for") == 0 { return 19 }
+    if strcmp(id, "कृते") == 0 { return 19 }
+    if strcmp(id, "चक्र") == 0 { return 19 }
+    
+    if strcmp(id, "in") == 0 { return 20 }
+    if strcmp(id, "अन्तः") == 0 { return 20 }
+    if strcmp(id, "मध्ये") == 0 { return 20 }
+    if strcmp(id, "अन्दर") == 0 { return 20 }
+    
+    # Returning functions
+    if strcmp(id, "return") == 0 { return 10 }
+    if strcmp(id, "प्रतिफल") == 0 { return 10 }
+    if strcmp(id, "निवर्तय") == 0 { return 10 }
+    
+    # Parallel thread execution / Spawn calls
+    if strcmp(id, "spawn") == 0 { return 30 }
+    if strcmp(id, "thread") == 0 { return 30 }
+    if strcmp(id, "parallel") == 0 { return 30 }
+    
+    # Auto-detected Print Intrinsic
+    if strcmp(id, "print") == 0 { return 300 }
+    if strcmp(id, "write") == 0 { return 300 }
+    if strcmp(id, "likho") == 0 { return 300 }
+    if strcmp(id, "लिखो") == 0 { return 300 }
+    if strcmp(id, "mudrit") == 0 { return 300 }
+    if strcmp(id, "मुद्रित") == 0 { return 300 }
+    
+    # Boolean Literals
+    if strcmp(id, "true") == 0 { return 27 }
+    if strcmp(id, "सत्य") == 0 { return 27 }
+    if strcmp(id, "सत्यम्") == 0 { return 27 }
+    
+    if strcmp(id, "false") == 0 { return 28 }
+    if strcmp(id, "असत्य") == 0 { return 28 }
+    if strcmp(id, "असत्यम्") == 0 { return 28 }
+    
+    if strcmp(id, "null") == 0 { return 29 }
+    if strcmp(id, "None") == 0 { return 29 }
+    if strcmp(id, "शून्य") == 0 { return 29 }
+    
+    return 5 # Standard Identifier
+}
+
+fn is_space(c) {
+    if strcmp(c, " ") == 0 { return true }
+    if strcmp(c, get_tab_char()) == 0 { return true }
+    if strcmp(c, get_cr_char()) == 0 { return true }
+    return false
+}
+
+fn is_delimiter(c) {
+    if strcmp(c, "(") == 0 { return true }
+    if strcmp(c, ")") == 0 { return true }
+    if strcmp(c, "{") == 0 { return true }
+    if strcmp(c, "}") == 0 { return true }
+    if strcmp(c, "[") == 0 { return true }
+    if strcmp(c, "]") == 0 { return true }
+    if strcmp(c, ";") == 0 { return true }
+    if strcmp(c, ",") == 0 { return true }
+    if strcmp(c, ".") == 0 { return true }
+    if strcmp(c, "+") == 0 { return true }
+    if strcmp(c, "-") == 0 { return true }
+    if strcmp(c, "*") == 0 { return true }
+    if strcmp(c, "/") == 0 { return true }
+    if strcmp(c, "=") == 0 { return true }
+    if strcmp(c, "<") == 0 { return true }
+    if strcmp(c, ">") == 0 { return true }
+    if strcmp(c, get_quote_char()) == 0 { return true }
+    if strcmp(c, "#") == 0 { return true }
+    if is_space(c) { return true }
+    if strcmp(c, get_newline_char()) == 0 { return true }
+    return false
+}
+
+fn is_alpha(c) {
+    # Check ASCII alphabetic
+    if strcmp(c, "a") >= 0 {
+        if strcmp(c, "z") <= 0 {
+            return true
+        }
+    }
+    if strcmp(c, "A") >= 0 {
+        if strcmp(c, "Z") <= 0 {
+            return true
+        }
+    }
+    if strcmp(c, "_") == 0 {
+        return true
+    }
+    
+    # UTF-8 Multi-byte Characters (Sanskrit / Hindi letters fall here)
+    # They are greater than ASCII characters and must be allowed as identifiers
+    if strcmp(c, "a") > 0 {
+        # Check that it is not standard delimiter
+        if is_delimiter(c) {
+            return false
+        }
+        return true
+    }
+    return false
+}
+
+fn is_digit(c) {
+    if strcmp(c, "0") >= 0 {
+        if strcmp(c, "9") <= 0 {
+            return true
+        }
+    }
+    return false
+}
+
+fn skip_whitespace_and_comments(input, pos) {
+    var len = strlen(input)
+    var idx = pos
+    var nl = get_newline_char()
+    
+    var loop = true
+    while loop {
+        if idx < len {
+            var c = get_char(input, idx)
+            if is_space(c) {
+                idx = idx + 1
+            } else {
+                # Skip comments starting with '#'
+                if strcmp(c, "#") == 0 {
+                    idx = idx + 1
+                    var comment_loop = true
+                    while comment_loop {
+                        if idx < len {
+                            if strcmp(get_char(input, idx), nl) == 0 {
+                                comment_loop = false
+                            } else {
+                                idx = idx + 1
+                            }
+                        } else {
+                            comment_loop = false
+                        }
+                    }
+                } else {
+                    loop = false
+                }
+            }
+        } else {
+            loop = false
+        }
+    }
+    return idx
+}
+
+# Packs TokenKind and Length into a single integer: kind + (len * 256)
+fn lex_next_token(input, pos) {
+    var len = strlen(input)
+    var idx = skip_whitespace_and_comments(input, pos)
+    
+    if idx >= len {
+        return 1 # EOF
+    }
+    
+    var c = get_char(input, idx)
+    var nl = get_newline_char()
+    
+    if strcmp(c, nl) == 0 {
+        return 2 + 256 # Newline (kind 2, len 1)
+    }
+    
+    # String literals
+    var quote = get_quote_char()
+    if strcmp(c, quote) == 0 {
+        var start = idx
+        idx = idx + 1 # skip open quote
+        var str_loop = true
+        while str_loop {
+            if idx < len {
+                if strcmp(get_char(input, idx), quote) == 0 {
+                    str_loop = false
+                } else {
+                    idx = idx + 1
+                }
+            } else {
+                str_loop = false
+            }
+        }
+        if idx < len {
+            idx = idx + 1 # skip close quote
+        }
+        var tok_len = idx - start
+        return 3 + tok_len * 256 # String (kind 3)
+    }
+    
+    # Number literals
+    if is_digit(c) {
+        var start = idx
+        var num_loop = true
+        while num_loop {
+            if idx < len {
+                if is_digit(get_char(input, idx)) {
+                    idx = idx + 1
+                } else {
+                    num_loop = false
+                }
+            } else {
+                num_loop = false
+            }
+        }
+        var tok_len = idx - start
+        return 4 + tok_len * 256 # Number (kind 4)
+    }
+    
+    # Multilingual Identifier or Keyword
+    if is_alpha(c) {
+        var start = idx
+        var alpha_loop = true
+        while alpha_loop {
+            if idx < len {
+                var curr = get_char(input, idx)
+                if is_alpha(curr) {
+                    idx = idx + 1
+                } else {
+                    if is_digit(curr) {
+                        idx = idx + 1
+                    } else {
+                        alpha_loop = false
+                    }
+                }
+            } else {
+                alpha_loop = false
+            }
+        }
+        var tok_len = idx - start
+        var id = substring(input, start, idx)
+        var kind = get_keyword_kind(id)
+        return kind + tok_len * 256
+    }
+    
+    # Operators and delimiters
+    if strcmp(c, "=") == 0 {
+        if idx + 1 < len {
+            if strcmp(get_char(input, idx + 1), "=") == 0 {
+                return 47 + 512 # Equal (==)
+            }
+        }
+        return 40 + 256 # Assign (=)
+    }
+    
+    if strcmp(c, "<") == 0 {
+        if idx + 1 < len {
+            if strcmp(get_char(input, idx + 1), "=") == 0 {
+                return 48 + 512 # LessEqual (<=)
+            }
+        }
+        return 45 + 256 # Less (<)
+    }
+    
+    if strcmp(c, ">") == 0 {
+        if idx + 1 < len {
+            if strcmp(get_char(input, idx + 1), "=") == 0 {
+                return 49 + 512 # GreaterEqual (>=)
+            }
+        }
+        return 46 + 256 # Greater (>)
+    }
+    
+    if strcmp(c, "+") == 0 { return 41 + 256 }
+    if strcmp(c, "-") == 0 { return 42 + 256 }
+    if strcmp(c, "*") == 0 { return 43 + 256 }
+    if strcmp(c, "/") == 0 { return 44 + 256 }
+    if strcmp(c, "(") == 0 { return 31 + 256 }
+    if strcmp(c, ")") == 0 { return 32 + 256 }
+    if strcmp(c, "{") == 0 { return 33 + 256 }
+    if strcmp(c, "}") == 0 { return 34 + 256 }
+    if strcmp(c, "[") == 0 { return 35 + 256 }
+    if strcmp(c, "]") == 0 { return 36 + 256 }
+    if strcmp(c, ";") == 0 { return 37 + 256 }
+    if strcmp(c, ",") == 0 { return 38 + 256 }
+    if strcmp(c, ".") == 0 { return 39 + 256 }
+    
+    # Skip any invalid characters by consuming 1 byte
+    return 99 + 256 # Invalid token kind 99
+}
