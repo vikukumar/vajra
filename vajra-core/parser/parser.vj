@@ -28,6 +28,9 @@ fn pointer_read_i64(ptr, offset)
 @extern
 fn pointer_write_i64(ptr, offset, val)
 
+@extern
+fn unescape_string(s)
+
 # External tokenizer functions from lexer.vj
 @extern
 fn lex_next_token(input, pos)
@@ -141,6 +144,10 @@ fn create_parser_state(content) {
     pointer_write_i64(state, 0, content)
     pointer_write_i64(state, 1, strlen(content))
     pointer_write_i64(state, 2, 0)
+    pointer_write_i64(state, 3, 0)
+    pointer_write_i64(state, 4, 0)
+    pointer_write_i64(state, 5, 0)
+    pointer_write_i64(state, 6, 0)
     
     parser_advance(state)
     parser_advance(state)
@@ -171,7 +178,7 @@ fn parse_expression(state, is_primary) {
         if kind == 3 {
             parser_advance(state)
             var node = ast_new("Literal")
-            ast_set_value(node, val)
+            ast_set_value(node, unescape_string(val))
             return node
         }
         

@@ -1,0 +1,6 @@
+name: "vajra"
+version: "1.0.0"
+description: "Vajra programming language stage 1 self hosted release toolchain"
+icon: "assets/vajra_logo.ico"
+entry: "hello.vj"
+target: "windows"

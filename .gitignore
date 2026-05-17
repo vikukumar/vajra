@@ -3,8 +3,9 @@
 # ==========================================
 
 # Rust build artifacts
-/target/
-Cargo.lock
+/dist
+dist
+dist/
 
 # OS or editor specific
 .DS_Store

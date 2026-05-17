@@ -31,12 +31,14 @@ fn get_keyword_kind(id) {
     if strcmp(id, "fn") == 0 { return 50 }
     if strcmp(id, "कार्या") == 0 { return 50 }
     if strcmp(id, "कार्य") == 0 { return 50 }
+    if strcmp(id, "karya") == 0 { return 50 }
     if strcmp(id, "def") == 0 { return 50 }
     if strcmp(id, "function") == 0 { return 50 }
     
     # Variable bindings (Let / Const / Var)
     if strcmp(id, "let") == 0 { return 6 }
     if strcmp(id, "अस्तु") == 0 { return 6 }
+    if strcmp(id, "astu") == 0 { return 6 }
     if strcmp(id, "मान") == 0 { return 6 }
     if strcmp(id, "const") == 0 { return 6 }
     if strcmp(id, "var") == 0 { return 6 }
@@ -49,10 +51,12 @@ fn get_keyword_kind(id) {
     # Conditionals
     if strcmp(id, "if") == 0 { return 8 }
     if strcmp(id, "यदि") == 0 { return 8 }
+    if strcmp(id, "yadi") == 0 { return 8 }
     if strcmp(id, "चेत्") == 0 { return 8 }
     
     if strcmp(id, "else") == 0 { return 9 }
     if strcmp(id, "अन्यथा") == 0 { return 9 }
+    if strcmp(id, "anyatha") == 0 { return 9 }
     if strcmp(id, "नोचेत्") == 0 { return 9 }
     if strcmp(id, "elif") == 0 { return 9 }
     
@@ -60,6 +64,7 @@ fn get_keyword_kind(id) {
     if strcmp(id, "while") == 0 { return 14 }
     if strcmp(id, "यावत्") == 0 { return 14 }
     if strcmp(id, "जबतक") == 0 { return 14 }
+    if strcmp(id, "jabtak") == 0 { return 14 }
     
     if strcmp(id, "for") == 0 { return 19 }
     if strcmp(id, "कृते") == 0 { return 19 }
@@ -73,6 +78,8 @@ fn get_keyword_kind(id) {
     # Returning functions
     if strcmp(id, "return") == 0 { return 10 }
     if strcmp(id, "प्रतिफल") == 0 { return 10 }
+    if strcmp(id, "लौटाओ") == 0 { return 10 }
+    if strcmp(id, "loutao") == 0 { return 10 }
     if strcmp(id, "निवर्तय") == 0 { return 10 }
     
     # Parallel thread execution / Spawn calls
@@ -85,76 +92,75 @@ fn get_keyword_kind(id) {
     if strcmp(id, "write") == 0 { return 300 }
     if strcmp(id, "likho") == 0 { return 300 }
     if strcmp(id, "लिखो") == 0 { return 300 }
+    if strcmp(id, "chapo") == 0 { return 300 }
+    if strcmp(id, "छापो") == 0 { return 300 }
     if strcmp(id, "mudrit") == 0 { return 300 }
     if strcmp(id, "मुद्रित") == 0 { return 300 }
     
     # Boolean Literals
     if strcmp(id, "true") == 0 { return 27 }
     if strcmp(id, "सत्य") == 0 { return 27 }
+    if strcmp(id, "saty") == 0 { return 27 }
     if strcmp(id, "सत्यम्") == 0 { return 27 }
     
     if strcmp(id, "false") == 0 { return 28 }
     if strcmp(id, "असत्य") == 0 { return 28 }
+    if strcmp(id, "asaty") == 0 { return 28 }
     if strcmp(id, "असत्यम्") == 0 { return 28 }
     
     if strcmp(id, "null") == 0 { return 29 }
     if strcmp(id, "None") == 0 { return 29 }
+    if strcmp(id, "shunya") == 0 { return 29 }
     if strcmp(id, "शून्य") == 0 { return 29 }
-    
     return 5 # Standard Identifier
 }
 
 fn is_space(c) {
-    if strcmp(c, " ") == 0 { return true }
-    if strcmp(c, get_tab_char()) == 0 { return true }
-    if strcmp(c, get_cr_char()) == 0 { return true }
+    if c == 32 { return true }  # ' '
+    if c == 9 { return true }   # '\t'
+    if c == 13 { return true }  # '\r'
     return false
 }
 
 fn is_delimiter(c) {
-    if strcmp(c, "(") == 0 { return true }
-    if strcmp(c, ")") == 0 { return true }
-    if strcmp(c, "{") == 0 { return true }
-    if strcmp(c, "}") == 0 { return true }
-    if strcmp(c, "[") == 0 { return true }
-    if strcmp(c, "]") == 0 { return true }
-    if strcmp(c, ";") == 0 { return true }
-    if strcmp(c, ",") == 0 { return true }
-    if strcmp(c, ".") == 0 { return true }
-    if strcmp(c, "+") == 0 { return true }
-    if strcmp(c, "-") == 0 { return true }
-    if strcmp(c, "*") == 0 { return true }
-    if strcmp(c, "/") == 0 { return true }
-    if strcmp(c, "=") == 0 { return true }
-    if strcmp(c, "<") == 0 { return true }
-    if strcmp(c, ">") == 0 { return true }
-    if strcmp(c, get_quote_char()) == 0 { return true }
-    if strcmp(c, "#") == 0 { return true }
+    if c == 40 { return true }  # '('
+    if c == 41 { return true }  # ')'
+    if c == 123 { return true } # '{'
+    if c == 125 { return true } # '}'
+    if c == 91 { return true }  # '['
+    if c == 93 { return true }  # ']'
+    if c == 59 { return true }  # ';'
+    if c == 44 { return true }  # ','
+    if c == 46 { return true }  # '.'
+    if c == 43 { return true }  # '+'
+    if c == 45 { return true }  # '-'
+    if c == 42 { return true }  # '*'
+    if c == 47 { return true }  # '/'
+    if c == 61 { return true }  # '='
+    if c == 60 { return true }  # '<'
+    if c == 62 { return true }  # '>'
+    if c == 34 { return true }  # '"'
+    if c == 35 { return true }  # '#'
     if is_space(c) { return true }
-    if strcmp(c, get_newline_char()) == 0 { return true }
+    if c == 10 { return true }  # '\n'
     return false
 }
 
 fn is_alpha(c) {
-    # Check ASCII alphabetic
-    if strcmp(c, "a") >= 0 {
-        if strcmp(c, "z") <= 0 {
+    if c >= 97 {
+        if c <= 122 {
             return true
         }
     }
-    if strcmp(c, "A") >= 0 {
-        if strcmp(c, "Z") <= 0 {
+    if c >= 65 {
+        if c <= 90 {
             return true
         }
     }
-    if strcmp(c, "_") == 0 {
+    if c == 95 {
         return true
     }
-    
-    # UTF-8 Multi-byte Characters (Sanskrit / Hindi letters fall here)
-    # They are greater than ASCII characters and must be allowed as identifiers
-    if strcmp(c, "a") > 0 {
-        # Check that it is not standard delimiter
+    if c >= 128 {
         if is_delimiter(c) {
             return false
         }
@@ -164,8 +170,8 @@ fn is_alpha(c) {
 }
 
 fn is_digit(c) {
-    if strcmp(c, "0") >= 0 {
-        if strcmp(c, "9") <= 0 {
+    if c >= 48 {
+        if c <= 57 {
             return true
         }
     }
@@ -175,7 +181,6 @@ fn is_digit(c) {
 fn skip_whitespace_and_comments(input, pos) {
     var len = strlen(input)
     var idx = pos
-    var nl = get_newline_char()
     
     var loop = true
     while loop {
@@ -184,13 +189,12 @@ fn skip_whitespace_and_comments(input, pos) {
             if is_space(c) {
                 idx = idx + 1
             } else {
-                # Skip comments starting with '#'
-                if strcmp(c, "#") == 0 {
+                if c == 35 { # '#'
                     idx = idx + 1
                     var comment_loop = true
                     while comment_loop {
                         if idx < len {
-                            if strcmp(get_char(input, idx), nl) == 0 {
+                            if get_char(input, idx) == 10 { # '\n'
                                 comment_loop = false
                             } else {
                                 idx = idx + 1
@@ -210,7 +214,6 @@ fn skip_whitespace_and_comments(input, pos) {
     return idx
 }
 
-# Packs TokenKind and Length into a single integer: kind + (len * 256)
 fn lex_next_token(input, pos) {
     var len = strlen(input)
     var idx = skip_whitespace_and_comments(input, pos)
@@ -220,21 +223,18 @@ fn lex_next_token(input, pos) {
     }
     
     var c = get_char(input, idx)
-    var nl = get_newline_char()
     
-    if strcmp(c, nl) == 0 {
+    if c == 10 { # '\n'
         return 2 + 256 # Newline (kind 2, len 1)
     }
     
-    # String literals
-    var quote = get_quote_char()
-    if strcmp(c, quote) == 0 {
+    if c == 34 { # '"'
         var start = idx
         idx = idx + 1 # skip open quote
         var str_loop = true
         while str_loop {
             if idx < len {
-                if strcmp(get_char(input, idx), quote) == 0 {
+                if get_char(input, idx) == 34 { # '"'
                     str_loop = false
                 } else {
                     idx = idx + 1
@@ -250,7 +250,6 @@ fn lex_next_token(input, pos) {
         return 3 + tok_len * 256 # String (kind 3)
     }
     
-    # Number literals
     if is_digit(c) {
         var start = idx
         var num_loop = true
@@ -269,7 +268,6 @@ fn lex_next_token(input, pos) {
         return 4 + tok_len * 256 # Number (kind 4)
     }
     
-    # Multilingual Identifier or Keyword
     if is_alpha(c) {
         var start = idx
         var alpha_loop = true
@@ -295,48 +293,46 @@ fn lex_next_token(input, pos) {
         return kind + tok_len * 256
     }
     
-    # Operators and delimiters
-    if strcmp(c, "=") == 0 {
+    if c == 61 { # '='
         if idx + 1 < len {
-            if strcmp(get_char(input, idx + 1), "=") == 0 {
-                return 47 + 512 # Equal (==)
+            if get_char(input, idx + 1) == 61 { # '=='
+                return 47 + 512
             }
         }
-        return 40 + 256 # Assign (=)
+        return 40 + 256
     }
     
-    if strcmp(c, "<") == 0 {
+    if c == 60 { # '<'
         if idx + 1 < len {
-            if strcmp(get_char(input, idx + 1), "=") == 0 {
-                return 48 + 512 # LessEqual (<=)
+            if get_char(input, idx + 1) == 61 { # '<='
+                return 48 + 512
             }
         }
-        return 45 + 256 # Less (<)
+        return 45 + 256
     }
     
-    if strcmp(c, ">") == 0 {
+    if c == 62 { # '>'
         if idx + 1 < len {
-            if strcmp(get_char(input, idx + 1), "=") == 0 {
-                return 49 + 512 # GreaterEqual (>=)
+            if get_char(input, idx + 1) == 61 { # '>='
+                return 49 + 512
             }
         }
-        return 46 + 256 # Greater (>)
+        return 46 + 256
     }
     
-    if strcmp(c, "+") == 0 { return 41 + 256 }
-    if strcmp(c, "-") == 0 { return 42 + 256 }
-    if strcmp(c, "*") == 0 { return 43 + 256 }
-    if strcmp(c, "/") == 0 { return 44 + 256 }
-    if strcmp(c, "(") == 0 { return 31 + 256 }
-    if strcmp(c, ")") == 0 { return 32 + 256 }
-    if strcmp(c, "{") == 0 { return 33 + 256 }
-    if strcmp(c, "}") == 0 { return 34 + 256 }
-    if strcmp(c, "[") == 0 { return 35 + 256 }
-    if strcmp(c, "]") == 0 { return 36 + 256 }
-    if strcmp(c, ";") == 0 { return 37 + 256 }
-    if strcmp(c, ",") == 0 { return 38 + 256 }
-    if strcmp(c, ".") == 0 { return 39 + 256 }
+    if c == 43 { return 41 + 256 }  # '+'
+    if c == 45 { return 42 + 256 }  # '-'
+    if c == 42 { return 43 + 256 }  # '*'
+    if c == 47 { return 44 + 256 }  # '/'
+    if c == 40 { return 31 + 256 }  # '('
+    if c == 41 { return 32 + 256 }  # ')'
+    if c == 123 { return 33 + 256 } # '{'
+    if c == 125 { return 34 + 256 } # '}'
+    if c == 91 { return 35 + 256 }  # '['
+    if c == 93 { return 36 + 256 }  # ']'
+    if c == 59 { return 37 + 256 }  # ';'
+    if c == 44 { return 38 + 256 }  # ','
+    if c == 46 { return 39 + 256 }  # '.'
     
-    # Skip any invalid characters by consuming 1 byte
-    return 99 + 256 # Invalid token kind 99
+    return 99 + 256
 }

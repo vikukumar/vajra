@@ -56,6 +56,18 @@ fn set_manifest_entry(val)
 @extern
 fn get_manifest_entry_val()
 
+@extern
+fn set_manifest_description(val)
+
+@extern
+fn get_manifest_description_val()
+
+@extern
+fn set_manifest_icon(val)
+
+@extern
+fn get_manifest_icon_val()
+
 
 fn trim(s) {
     var len = strlen(s)
@@ -89,6 +101,82 @@ fn trim(s) {
     }
     
     return substring(s, start, end)
+}
+
+fn clean_description(desc) {
+    var len = strlen(desc)
+    var buf = malloc(len + 1)
+    var i = 0
+    var o = 0
+    while i < len {
+        var match_self_hosted = false
+        if i + 11 <= len {
+            if get_char(desc, i) == 115 {
+                if get_char(desc, i + 1) == 101 {
+                    if get_char(desc, i + 2) == 108 {
+                        if get_char(desc, i + 3) == 102 {
+                            if get_char(desc, i + 4) == 32 {
+                                if get_char(desc, i + 5) == 104 {
+                                    if get_char(desc, i + 6) == 111 {
+                                        if get_char(desc, i + 7) == 115 {
+                                            if get_char(desc, i + 8) == 116 {
+                                                if get_char(desc, i + 9) == 101 {
+                                                    if get_char(desc, i + 10) == 100 {
+                                                        match_self_hosted = true
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        var match_self_hosted_dash = false
+        if i + 11 <= len {
+            if get_char(desc, i) == 115 {
+                if get_char(desc, i + 1) == 101 {
+                    if get_char(desc, i + 2) == 108 {
+                        if get_char(desc, i + 3) == 102 {
+                            if get_char(desc, i + 4) == 45 {
+                                if get_char(desc, i + 5) == 104 {
+                                    if get_char(desc, i + 6) == 111 {
+                                        if get_char(desc, i + 7) == 115 {
+                                            if get_char(desc, i + 8) == 116 {
+                                                if get_char(desc, i + 9) == 101 {
+                                                    if get_char(desc, i + 10) == 100 {
+                                                        match_self_hosted_dash = true
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if match_self_hosted {
+            i = i + 11
+        } else {
+            if match_self_hosted_dash {
+                i = i + 11
+            } else {
+                pointer_write_byte(buf, o, get_char(desc, i))
+                i = i + 1
+                o = o + 1
+            }
+        }
+    }
+    pointer_write_byte(buf, o, 0)
+    return trim(buf)
 }
 
 fn parse_json_manifest(content) {
@@ -169,6 +257,8 @@ fn parse_json_manifest(content) {
                 if strcmp(key, "version") == 0 { set_manifest_version(val) }
                 if strcmp(key, "target") == 0 { set_manifest_target(val) }
                 if strcmp(key, "entry") == 0 { set_manifest_entry(val) }
+                if strcmp(key, "description") == 0 { set_manifest_description(clean_description(val)) }
+                if strcmp(key, "icon") == 0 { set_manifest_icon(val) }
             }
         }
         idx = idx + 1
@@ -241,6 +331,8 @@ fn parse_yaml_manifest(content) {
                 if strcmp(key, "version") == 0 { set_manifest_version(val) }
                 if strcmp(key, "target") == 0 { set_manifest_target(val) }
                 if strcmp(key, "entry") == 0 { set_manifest_entry(val) }
+                if strcmp(key, "description") == 0 { set_manifest_description(clean_description(val)) }
+                if strcmp(key, "icon") == 0 { set_manifest_icon(val) }
             }
         }
     }
@@ -287,3 +379,5 @@ fn get_manifest_name() { return get_manifest_name_val() }
 fn get_manifest_version() { return get_manifest_version_val() }
 fn get_manifest_target() { return get_manifest_target_val() }
 fn get_manifest_entry() { return get_manifest_entry_val() }
+fn get_manifest_description() { return get_manifest_description_val() }
+fn get_manifest_icon() { return get_manifest_icon_val() }
