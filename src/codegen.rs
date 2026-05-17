@@ -83,7 +83,14 @@ impl<'ctx> Codegen<'ctx> {
                 if let Some(memo_ptr) = *self.current_memo_ptr.borrow() {
                     let _ = self.builder.build_store(memo_ptr, val);
                 }
-                let _ = self.builder.build_return(Some(&val));
+                let current_func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let is_main_func = current_func.get_name().to_str().unwrap() == "main";
+                if is_main_func {
+                    let cast_val = self.builder.build_int_truncate(val.into_int_value(), self.context.i32_type(), "main_ret_cast").map_err(|e| e.to_string())?;
+                    let _ = self.builder.build_return(Some(&cast_val));
+                } else {
+                    let _ = self.builder.build_return(Some(&val));
+                }
             }
             Statement::Method { access: _, name, params, body } => {
                 self.compile_function(name, params, body, false, false)?;
@@ -366,12 +373,21 @@ impl<'ctx> Codegen<'ctx> {
     fn compile_function(&self, name: &str, params: &[String], body: &[Statement], is_main: bool, is_extern: bool) -> Result<FunctionValue<'ctx>, String> {
         let fn_name = if is_main { "main" } else { name };
         let i64_type = self.context.i64_type();
-        let param_types = vec![i64_type.into(); params.len()];
-        let fn_type = i64_type.fn_type(&param_types, false);
         
         let function = match self.module.get_function(fn_name) {
             Some(f) => f,
-            None => self.module.add_function(fn_name, fn_type, None),
+            None => {
+                if is_main {
+                    let i32_type = self.context.i32_type();
+                    let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                    let fn_type = i32_type.fn_type(&[i32_type.into(), ptr_type.into()], false);
+                    self.module.add_function(fn_name, fn_type, None)
+                } else {
+                    let param_types = vec![i64_type.into(); params.len()];
+                    let fn_type = i64_type.fn_type(&param_types, false);
+                    self.module.add_function(fn_name, fn_type, None)
+                }
+            }
         };
 
         if is_extern {
@@ -381,7 +397,28 @@ impl<'ctx> Codegen<'ctx> {
         let basic_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(basic_block);
 
+        self.variables.borrow_mut().clear();
+
         if is_main {
+            // Allocate, store and register native CLI args
+            let argc_val = function.get_nth_param(0).unwrap();
+            let argv_val = function.get_nth_param(1).unwrap();
+            
+            let argc_alloca = self.builder.build_alloca(self.context.i32_type(), "argc_ptr").map_err(|e| e.to_string())?;
+            let _ = self.builder.build_store(argc_alloca, argc_val);
+            
+            let argv_alloca = self.builder.build_alloca(self.context.ptr_type(inkwell::AddressSpace::default()), "argv_ptr").map_err(|e| e.to_string())?;
+            let _ = self.builder.build_store(argv_alloca, argv_val);
+            
+            // Expose argc as i64 in user scope for math/logic
+            let argc_i64_alloca = self.builder.build_alloca(i64_type, "argc").map_err(|e| e.to_string())?;
+            let argc_ext = self.builder.build_int_z_extend(argc_val.into_int_value(), i64_type, "argc_ext").map_err(|e| e.to_string())?;
+            let _ = self.builder.build_store(argc_i64_alloca, argc_ext);
+            
+            self.variables.borrow_mut().insert("argc".to_string(), argc_i64_alloca);
+            self.variables.borrow_mut().insert("argv".to_string(), argv_alloca);
+
+            // Call __main initialization
             let main_init_fn = match self.module.get_function("__main") {
                 Some(f) => f,
                 None => {
@@ -391,15 +428,13 @@ impl<'ctx> Codegen<'ctx> {
                 }
             };
             let _ = self.builder.build_call(main_init_fn, &[], "main_init_call");
-        }
-
-        self.variables.borrow_mut().clear();
-
-        for (i, arg) in function.get_param_iter().enumerate() {
-            let arg_name = &params[i];
-            let alloca = self.create_entry_block_alloca(arg_name);
-            let _ = self.builder.build_store(alloca, arg);
-            self.variables.borrow_mut().insert(arg_name.clone(), alloca);
+        } else {
+            for (i, arg) in function.get_param_iter().enumerate() {
+                let arg_name = &params[i];
+                let alloca = self.create_entry_block_alloca(arg_name);
+                let _ = self.builder.build_store(alloca, arg);
+                self.variables.borrow_mut().insert(arg_name.clone(), alloca);
+            }
         }
 
         let is_fib = name == "fib";
@@ -468,7 +503,11 @@ impl<'ctx> Codegen<'ctx> {
         }
 
         if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
-            let _ = self.builder.build_return(Some(&i64_type.const_int(0, false)));
+            if is_main {
+                let _ = self.builder.build_return(Some(&self.context.i32_type().const_int(0, false)));
+            } else {
+                let _ = self.builder.build_return(Some(&i64_type.const_int(0, false)));
+            }
         }
 
         if is_fib {
