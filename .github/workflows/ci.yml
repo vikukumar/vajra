@@ -37,18 +37,27 @@ jobs:
         brew install llvm@19
         echo "LLVM_SYS_191_PREFIX=$(brew --prefix llvm@19)" >> $GITHUB_ENV
 
-    - name: Install LLVM & Clang (Windows)
+    - name: Set up MSYS2 (Windows)
       if: matrix.os == 'windows-latest'
-      uses: KyleMayes/install-llvm-action@v2
+      uses: msys2/setup-msys2@v2
       with:
-        version: "19.1"
+        msystem: MINGW64
+        update: false
 
-    - name: Configure LLVM paths (Windows)
+    - name: Install MSYS2 LLVM 19 (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: msys2 {0}
+      run: |
+        pacman -U --noconfirm \
+          https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-llvm-libs-19.1.0-1-any.pkg.tar.zst \
+          https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-llvm-19.1.0-1-any.pkg.tar.zst
+
+    - name: Configure MSYS2 LLVM paths (Windows)
       if: matrix.os == 'windows-latest'
       shell: bash
       run: |
-        echo "LLVM_SYS_191_PREFIX=${{ env.LLVM_PATH }}" >> $GITHUB_ENV
-        echo "${{ env.LLVM_PATH }}/bin" >> $GITHUB_PATH
+        echo "LLVM_SYS_191_PREFIX=C:/msys64/mingw64" >> $GITHUB_ENV
+        echo "C:/msys64/mingw64/bin" >> $GITHUB_PATH
 
     - name: Verify LLVM installation
       shell: bash
