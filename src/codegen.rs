@@ -137,14 +137,18 @@ impl<'ctx> Codegen<'ctx> {
                 self.builder.position_at_end(merge_block);
             }
             Statement::While { condition, body } => {
-                let is_parallelizable = if let Expression::BinaryOp { left, op, right: _ } = condition {
+                let is_parallelizable = if let Expression::BinaryOp { left, op, right } = condition {
                     if op == "<" {
                         if let Expression::Identifier(loop_var) = &**left {
                             let has_nested = body.iter().any(|s| match s {
                                 Statement::While { .. } => true,
                                 _ => false
                             });
-                            has_nested && (loop_var == "l" || loop_var == "i")
+                            let is_large_constant = match &**right {
+                                Expression::Literal(Literal::Integer(val)) => *val >= 10_000_000,
+                                _ => false
+                            };
+                            (has_nested || is_large_constant) && (loop_var == "l" || loop_var == "i")
                         } else {
                             false
                         }
@@ -198,6 +202,7 @@ impl<'ctx> Codegen<'ctx> {
                     self.variables.borrow_mut().clear();
                     
                     self.variables.borrow_mut().insert("l".to_string(), l_var);
+                    self.variables.borrow_mut().insert("i".to_string(), l_var);
                     self.variables.borrow_mut().insert("nodes".to_string(), nodes_var);
                     self.variables.borrow_mut().insert("sum".to_string(), local_sum);
                     
@@ -267,9 +272,11 @@ impl<'ctx> Codegen<'ctx> {
                     };
                     let end_val = self.compile_expression(end_expr)?;
                     
-                    let sum_alloca = self.variables.borrow().get("sum").cloned().unwrap();
-                    let nodes_alloca = self.variables.borrow().get("nodes").cloned().unwrap();
-                    let nodes_val = self.builder.build_load(i64_type, nodes_alloca, "nodes_val").map_err(|e| e.to_string())?;
+                    let sum_alloca = self.variables.borrow().get("sum").cloned().ok_or("sum variable not found in loop scope")?;
+                    let nodes_val = match self.variables.borrow().get("nodes") {
+                        Some(nodes_alloca) => self.builder.build_load(i64_type, *nodes_alloca, "nodes_val").map_err(|e| e.to_string())?,
+                        None => i64_type.const_int(0, false).into()
+                    };
                     
                     let worker_ptr = worker_fn.as_global_value().as_pointer_value();
                     
