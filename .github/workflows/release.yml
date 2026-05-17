@@ -65,8 +65,8 @@ jobs:
       shell: bash
       run: |
         tar -xzf llvm_msys64.tar.gz
-        echo "LLVM_SYS_191_PREFIX=$GITHUB_WORKSPACE/llvm_msys64/mingw64" >> $GITHUB_ENV
-        echo "$GITHUB_WORKSPACE/llvm_msys64/mingw64/bin" >> $GITHUB_PATH
+        echo "LLVM_SYS_191_PREFIX=$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64")" >> $GITHUB_ENV
+        echo "$(cygpath -w "$GITHUB_WORKSPACE/llvm_msys64/mingw64/bin")" >> $GITHUB_PATH
 
     - name: Verify LLVM installation
       shell: bash
