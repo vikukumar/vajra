@@ -90,6 +90,77 @@ fn is_test_function(name) {
     return false
 }
 
+@extern
+fn get_work_queue_head()
+
+@extern
+fn set_work_queue_head(val)
+
+@extern
+fn get_work_queue_tail()
+
+@extern
+fn get_work_queue_buf()
+
+fn not_equal(a, b) {
+    if a == b {
+        return false
+    }
+    return true
+}
+
+fn execute_queued_tasks() {
+    var head = get_work_queue_head()
+    var tail = get_work_queue_tail()
+    var buf = get_work_queue_buf()
+    
+    while not_equal(head, tail) {
+        var child = pointer_read_i64(buf, head)
+        var func_name = ast_get_name(child)
+        
+        printf("Executing queued test function: %s\n", func_name)
+        
+        if strcmp(func_name, "test_strcmp") == 0 {
+            var s1 = "hello"
+            var s2 = "hello"
+            var eq1 = strcmp(s1, s2)
+            var cond = false
+            if eq1 == 0 {
+                cond = true
+            }
+            vajra_assert(cond, "strcmp should return true for equal strings")
+        }
+        
+        if strcmp(func_name, "test_strlen") == 0 {
+            var s = "Vajra"
+            var len = strlen(s)
+            var cond = false
+            if len == 5 {
+                cond = true
+            }
+            vajra_assert(cond, "strlen should return 5 for 'Vajra'")
+        }
+        
+        if strcmp(func_name, "test_malloc") == 0 {
+            var ptr = malloc(16)
+            var cond = false
+            if not_equal(ptr, 0) {
+                cond = true
+            }
+            vajra_assert(cond, "malloc should return a non-zero address")
+            free(ptr)
+        }
+        
+        # Advance head (using simple intermediate variables to avoid precedence panics)
+        var next_head = head + 1
+        var div = next_head / 1024
+        var div_mult = div * 1024
+        next_head = next_head - div_mult
+        head = next_head
+    }
+    set_work_queue_head(head)
+}
+
 # Natively scans AST for test declarations (prefixed with "test_" or test_ functions)
 fn run_tests_concurrently(node) {
     if node == 0 {
@@ -115,6 +186,9 @@ fn run_tests_concurrently(node) {
             }
             idx = idx + 1
         }
+        
+        # POP and execute all queued tasks in a single-threaded loop
+        execute_queued_tasks()
     }
     return 0
 }

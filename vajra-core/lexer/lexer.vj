@@ -88,14 +88,14 @@ fn get_keyword_kind(id) {
     if strcmp(id, "parallel") == 0 { return 30 }
     
     # Auto-detected Print Intrinsic
-    if strcmp(id, "print") == 0 { return 300 }
-    if strcmp(id, "write") == 0 { return 300 }
-    if strcmp(id, "likho") == 0 { return 300 }
-    if strcmp(id, "लिखो") == 0 { return 300 }
-    if strcmp(id, "chapo") == 0 { return 300 }
-    if strcmp(id, "छापो") == 0 { return 300 }
-    if strcmp(id, "mudrit") == 0 { return 300 }
-    if strcmp(id, "मुद्रित") == 0 { return 300 }
+    if strcmp(id, "print") == 0 { return 90 }
+    if strcmp(id, "write") == 0 { return 90 }
+    if strcmp(id, "likho") == 0 { return 90 }
+    if strcmp(id, "लिखो") == 0 { return 90 }
+    if strcmp(id, "chapo") == 0 { return 90 }
+    if strcmp(id, "छापो") == 0 { return 90 }
+    if strcmp(id, "mudrit") == 0 { return 90 }
+    if strcmp(id, "मुद्रित") == 0 { return 90 }
     
     # Boolean Literals
     if strcmp(id, "true") == 0 { return 27 }

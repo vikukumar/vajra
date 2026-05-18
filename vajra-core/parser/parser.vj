@@ -65,25 +65,51 @@ fn ast_new(type) {
     return node
 }
 
-fn ast_get_type(node) { return pointer_read_i64(node, 0) }
-fn ast_set_type(node, val) { pointer_write_i64(node, 0, val) }
+fn ast_get_type(node) {
+    return pointer_read_i64(node, 0)
+}
+fn ast_set_type(node, val) {
+    pointer_write_i64(node, 0, val)
+}
 
-fn ast_get_name(node) { return pointer_read_i64(node, 1) }
-fn ast_set_name(node, val) { pointer_write_i64(node, 1, val) }
+fn ast_get_name(node) {
+    return pointer_read_i64(node, 1)
+}
+fn ast_set_name(node, val) {
+    pointer_write_i64(node, 1, val)
+}
 
-fn ast_get_value(node) { return pointer_read_i64(node, 2) }
-fn ast_set_value(node, val) { pointer_write_i64(node, 2, val) }
+fn ast_get_value(node) {
+    return pointer_read_i64(node, 2)
+}
+fn ast_set_value(node, val) {
+    pointer_write_i64(node, 2, val)
+}
 
-fn ast_get_op(node) { return pointer_read_i64(node, 3) }
-fn ast_set_op(node, val) { pointer_write_i64(node, 3, val) }
+fn ast_get_op(node) {
+    return pointer_read_i64(node, 3)
+}
+fn ast_set_op(node, val) {
+    pointer_write_i64(node, 3, val)
+}
 
-fn ast_get_left(node) { return pointer_read_i64(node, 4) }
-fn ast_set_left(node, val) { pointer_write_i64(node, 4, val) }
+fn ast_get_left(node) {
+    return pointer_read_i64(node, 4)
+}
+fn ast_set_left(node, val) {
+    pointer_write_i64(node, 4, val)
+}
 
-fn ast_get_right(node) { return pointer_read_i64(node, 5) }
-fn ast_set_right(node, val) { pointer_write_i64(node, 5, val) }
+fn ast_get_right(node) {
+    return pointer_read_i64(node, 5)
+}
+fn ast_set_right(node, val) {
+    pointer_write_i64(node, 5, val)
+}
 
-fn ast_get_body_size(node) { return pointer_read_i64(node, 7) }
+fn ast_get_body_size(node) {
+    return pointer_read_i64(node, 7)
+}
 fn ast_get_body_item(node, idx) {
     var body = pointer_read_i64(node, 6)
     return pointer_read_i64(body, idx)
@@ -95,7 +121,9 @@ fn ast_push_body(node, item) {
     pointer_write_i64(node, 7, size + 1)
 }
 
-fn ast_get_args_size(node) { return pointer_read_i64(node, 10) }
+fn ast_get_args_size(node) {
+    return pointer_read_i64(node, 10)
+}
 fn ast_get_args_item(node, idx) {
     var args = pointer_read_i64(node, 9)
     return pointer_read_i64(args, idx)
@@ -128,13 +156,16 @@ fn parser_advance(state) {
         pointer_write_i64(state, 6, 0)  # PeekVal = ""
     } else {
         var packed = lex_next_token(content, pos)
-        var kind = packed - packed / 256 * 256
         var tok_len = packed / 256
+        var temp_kind = tok_len * 256
+        var kind = packed - temp_kind
         
         # Advance internal parser position past whitespace
         var next_pos = skip_whitespace_and_comments(content, pos)
+        var val_str = substring(content, next_pos, next_pos + tok_len)
+        
         pointer_write_i64(state, 5, kind)
-        pointer_write_i64(state, 6, substring(content, next_pos, next_pos + tok_len))
+        pointer_write_i64(state, 6, val_str)
         pointer_write_i64(state, 2, next_pos + tok_len)
     }
 }
@@ -191,7 +222,7 @@ fn parse_expression(state, is_primary) {
         }
         
         # Auto-detected Print Call Intrinsic (print / likho / mudrit)
-        if kind == 300 {
+        if kind == 90 {
             parser_advance(state) # skip keyword
             var node = ast_new("PrintCall")
             

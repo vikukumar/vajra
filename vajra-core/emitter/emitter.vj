@@ -5,6 +5,9 @@
 fn strcmp(s1, s2)
 
 @extern
+fn printf(fmt, arg)
+
+@extern
 fn strlen(s)
 
 @extern
@@ -87,24 +90,36 @@ fn cg_push_byte(cg, val) {
 }
 
 fn cg_push_i16(cg, val) {
-    var b1 = val - val / 256 * 256
+    var d1 = val / 256
+    var p1 = d1 * 256
+    var b1 = val - p1
     var v2 = val / 256
-    var b2 = v2 - v2 / 256 * 256
+    var d2 = v2 / 256
+    var p2 = d2 * 256
+    var b2 = v2 - p2
     cg_push_byte(cg, b1)
     cg_push_byte(cg, b2)
 }
 
 fn cg_push_i32(cg, val) {
-    var b1 = val - val / 256 * 256
+    var d1 = val / 256
+    var p1 = d1 * 256
+    var b1 = val - p1
     
     var v2 = val / 256
-    var b2 = v2 - v2 / 256 * 256
+    var d2 = v2 / 256
+    var p2 = d2 * 256
+    var b2 = v2 - p2
     
     var v3 = val / 65536
-    var b3 = v3 - v3 / 256 * 256
+    var d3 = v3 / 256
+    var p3 = d3 * 256
+    var b3 = v3 - p3
     
     var v4 = val / 16777216
-    var b4 = v4 - v4 / 256 * 256
+    var d4 = v4 / 256
+    var p4 = d4 * 256
+    var b4 = v4 - p4
     
     cg_push_byte(cg, b1)
     cg_push_byte(cg, b2)
@@ -119,7 +134,25 @@ fn cg_push_i64(cg, val) {
 
 # Machine Code Generation traversing optimized AST to x86_64 machine byte sequences
 fn compile_node(cg, node) {
+    if node == 0 { return 0 }
     var type = ast_get_type(node)
+    
+    if strcmp(type, "Identifier") == 0 {
+        var name = ast_get_name(node)
+        printf("compile_node: type=Identifier, name=%s\n", name)
+    } else {
+        if strcmp(type, "Function") == 0 {
+            var name = ast_get_name(node)
+            printf("compile_node: type=Function, name=%s\n", name)
+        } else {
+            if strcmp(type, "Let") == 0 {
+                var name = ast_get_name(node)
+                printf("compile_node: type=Let, name=%s\n", name)
+            } else {
+                printf("compile_node: type=%s\n", type)
+            }
+        }
+    }
     
     if strcmp(type, "Program") == 0 {
         var idx = 0
@@ -196,7 +229,7 @@ fn emit_pe_binary(f, text_buf, text_size) {
     # 1. DOS Header
     pointer_write_byte(pe_buf, 0, 77)  # 'M'
     pointer_write_byte(pe_buf, 1, 90)  # 'Z'
-    pointer_write_i64(pe_buf, 60 / 8, 128) # Offset to PE Signature (0x80)
+    pointer_write_byte(pe_buf, 60, 128) # Offset to PE Signature (0x80)
     
     # 2. PE Signature
     pointer_write_byte(pe_buf, 128, 80) # 'P'
@@ -206,29 +239,84 @@ fn emit_pe_binary(f, text_buf, text_size) {
     pointer_write_byte(pe_buf, 132, 100) # Machine: AMD64 (0x8664)
     pointer_write_byte(pe_buf, 133, 134)
     pointer_write_byte(pe_buf, 134, 1)   # Number of sections: 1 (.text)
+    pointer_write_byte(pe_buf, 148, 240) # SizeOfOptionalHeader: 240 bytes (0x00F0)
+    pointer_write_byte(pe_buf, 150, 34)  # Characteristics: 0x0022 (Executable | LargeAddressAware)
     
     # 4. Optional Header (PE32+)
     pointer_write_byte(pe_buf, 152, 11)  # Magic: PE32+ (0x20b)
     pointer_write_byte(pe_buf, 153, 2)
-    pointer_write_i64(pe_buf, 168 / 8, 4096)  # Address of EntryPoint
-    pointer_write_i64(pe_buf, 176 / 8, 4194304) # ImageBase (0x400000)
-    pointer_write_i64(pe_buf, 208 / 8, 4096)  # Section Alignment (0x1000)
-    pointer_write_i64(pe_buf, 216 / 8, 512)   # File Alignment (0x200)
-    pointer_write_byte(pe_buf, 244, 3)   # Subsystem: Console (3)
     
-    # 5. Section Table (.text)
+    # Address of EntryPoint (4096 / 0x1000)
+    pointer_write_byte(pe_buf, 168, 0)
+    pointer_write_byte(pe_buf, 169, 16) # 0x10
+    
+    # ImageBase (4,194,304 / 0x00400000)
+    pointer_write_i64(pe_buf, 176 / 8, 4194304)
+    
+    # Section Alignment (4096 / 0x1000)
+    pointer_write_byte(pe_buf, 184, 0)
+    pointer_write_byte(pe_buf, 185, 16) # 0x10
+    
+    # File Alignment (512 / 0x0200)
+    pointer_write_byte(pe_buf, 188, 0)
+    pointer_write_byte(pe_buf, 189, 2)  # 0x02
+    
+    # MajorSubsystemVersion: 6
+    pointer_write_byte(pe_buf, 200, 6)
+    
+    # SizeOfImage (8192 / 0x2000)
+    pointer_write_byte(pe_buf, 208, 0)
+    pointer_write_byte(pe_buf, 209, 32) # 0x20
+    
+    # SizeOfHeaders (512 / 0x0200)
+    pointer_write_byte(pe_buf, 212, 0)
+    pointer_write_byte(pe_buf, 213, 2)  # 0x02
+    
+    # Subsystem: Console (3)
+    pointer_write_byte(pe_buf, 220, 3)
+    
+    # DllCharacteristics: Dynamic base, NX compat, Terminal Server Aware (0x8140)
+    pointer_write_byte(pe_buf, 222, 64)  # 0x40
+    pointer_write_byte(pe_buf, 223, 129) # 0x81
+    
+    # SizeOfStackReserve (1MB / 0x00100000)
+    pointer_write_i64(pe_buf, 224 / 8, 1048576)
+    
+    # SizeOfStackCommit (4KB / 0x1000)
+    pointer_write_i64(pe_buf, 232 / 8, 4096)
+    
+    # SizeOfHeapReserve (1MB / 0x00100000)
+    pointer_write_i64(pe_buf, 240 / 8, 1048576)
+    
+    # SizeOfHeapCommit (4KB / 0x1000)
+    pointer_write_i64(pe_buf, 248 / 8, 4096)
+    
+    # NumberOfRvaAndSizes: 16
+    pointer_write_byte(pe_buf, 260, 16)
+    
+    # 5. Section Table (.text starts at 128 + 24 + 240 = 392)
     # Section Name: .text
-    pointer_write_byte(pe_buf, 320, 46) # '.'
-    pointer_write_byte(pe_buf, 321, 116) # 't'
-    pointer_write_byte(pe_buf, 322, 101) # 'e'
-    pointer_write_byte(pe_buf, 323, 120) # 'x'
-    pointer_write_byte(pe_buf, 324, 116) # 't'
-    pointer_write_i64(pe_buf, 328 / 8, 4096) # Virtual Size
-    pointer_write_i64(pe_buf, 336 / 8, 4096) # Virtual Address
-    pointer_write_i64(pe_buf, 344 / 8, 512)  # Raw Data Size (512 bytes aligned)
-    pointer_write_i64(pe_buf, 352 / 8, 512)  # Raw Data Pointer
-    pointer_write_i64(pe_buf, 360 / 8, 0)
-    pointer_write_i64(pe_buf, 368 / 8, 1610612768) # Characteristics: Code / Exec / Read
+    pointer_write_byte(pe_buf, 392, 46)  # '.'
+    pointer_write_byte(pe_buf, 393, 116) # 't'
+    pointer_write_byte(pe_buf, 394, 101) # 'e'
+    pointer_write_byte(pe_buf, 395, 120) # 'x'
+    pointer_write_byte(pe_buf, 396, 116) # 't'
+    
+    # Virtual Size: 4096 (0x1000)
+    pointer_write_byte(pe_buf, 401, 16) # 0x10
+    
+    # Virtual Address: 4096 (0x1000)
+    pointer_write_byte(pe_buf, 405, 16) # 0x10
+    
+    # SizeOfRawData: 512 (0x0200)
+    pointer_write_byte(pe_buf, 409, 2)  # 0x02
+    
+    # PointerToRawData: 512 (0x0200)
+    pointer_write_byte(pe_buf, 413, 2)  # 0x02
+    
+    # Characteristics: Code / Exec / Read (0x60000020)
+    pointer_write_byte(pe_buf, 428, 32) # 0x20
+    pointer_write_byte(pe_buf, 431, 96) # 0x60
     
     # Write PE Headers to output stream
     fwrite(pe_buf, 1, 512, f)

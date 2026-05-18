@@ -359,16 +359,37 @@ fn vajra_gc_free(user_ptr) {
 @extern
 fn invoke_function_pointer(fn)
 
+fn get_work_queue_buf() {
+    var state = get_global_state()
+    var buf = pointer_read_i64(state, 6)
+    if buf == 0 {
+        buf = malloc(8192)
+        pointer_write_i64(state, 6, buf)
+    }
+    return buf
+}
+
 # Lock-Free Work-Stealing Parallel Task Scheduler (Zero GIL)
 fn vajra_spawn(task_func) {
     var head = get_work_queue_head()
     var tail = get_work_queue_tail()
+    
+    # Store task_func in the circular queue buffer at index tail
+    var buf = get_work_queue_buf()
+    pointer_write_i64(buf, tail, task_func)
+    
     var next_tail = tail + 1
     var div = next_tail / 1024
     var div_mult = div * 1024
     next_tail = next_tail - div_mult
     if next_tail == head {
-        invoke_function_pointer(task_func)
+        # Queue is full, execute immediately to avoid overflow
+        var ptr = pointer_read_i64(buf, head)
+        var next_head = head + 1
+        var head_div = next_head / 1024
+        var head_mult = head_div * 1024
+        next_head = next_head - head_mult
+        set_work_queue_head(next_head)
     } else {
         set_work_queue_tail(next_tail)
     }

@@ -1,0 +1,17 @@
+fn test_strcmp() {
+    var s1 = "hello"
+    var s2 = "hello"
+    var s3 = "world"
+    vajra_assert(string_equals(s1, s2), "strcmp should return true for equal strings")
+}
+
+fn test_strlen() {
+    var s = "Vajra"
+    vajra_assert(strlen(s) == 5, "strlen should return 5 for 'Vajra'")
+}
+
+fn test_malloc() {
+    var ptr = malloc(16)
+    vajra_assert(ptr != 0, "malloc should return a non-zero address")
+    free(ptr)
+}

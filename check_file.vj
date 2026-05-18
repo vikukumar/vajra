@@ -1,0 +1,11 @@
+@extern
+fn read_file_content(path)
+
+@extern
+fn printf(fmt, arg)
+
+fn compile_main() {
+    var content = read_file_content("test.vajra")
+    printf("Content length: %lld\n", strlen(content))
+    printf("Content:\n%s\n", content)
+}
