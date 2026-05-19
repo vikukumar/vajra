@@ -226,11 +226,22 @@ impl Evaluator {
                                 Ok(Value::Integer(l / r))
                             }
                         }
-                        "<" => Ok(Value::Integer(if l < r { 1 } else { 0 })),
-                        ">" => Ok(Value::Integer(if l > r { 1 } else { 0 })),
+                        "%" => {
+                            if r == 0 {
+                                Err("विभाजनत्रुटि: शून्य से मॉड्यूलो संभव नहीं है".to_string())
+                            } else {
+                                Ok(Value::Integer(l % r))
+                            }
+                        }
+                        "&"  => Ok(Value::Integer(l & r)),
+                        "|"  => Ok(Value::Integer(l | r)),
+                        ">>" => Ok(Value::Integer(l >> r)),
+                        "<"  => Ok(Value::Integer(if l < r { 1 } else { 0 })),
+                        ">"  => Ok(Value::Integer(if l > r { 1 } else { 0 })),
                         "<=" => Ok(Value::Integer(if l <= r { 1 } else { 0 })),
                         ">=" => Ok(Value::Integer(if l >= r { 1 } else { 0 })),
                         "==" => Ok(Value::Integer(if l == r { 1 } else { 0 })),
+                        "!=" => Ok(Value::Integer(if l != r { 1 } else { 0 })),
                         _ => Err(format!("Error: Unknown binary operator '{}'", op)),
                     },
                     (Value::Float(l), Value::Float(r)) => match op.as_str() {

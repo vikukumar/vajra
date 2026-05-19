@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue};
 use crate::ast::*;
 
 pub struct Codegen<'ctx> {
@@ -11,6 +11,7 @@ pub struct Codegen<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub variables: RefCell<HashMap<String, PointerValue<'ctx>>>,
+    pub global_variables: RefCell<HashMap<String, GlobalValue<'ctx>>>,
     pub gc_alloc_fn: FunctionValue<'ctx>,
     pub gc_free_fn: FunctionValue<'ctx>,
     pub current_memo_ptr: RefCell<Option<PointerValue<'ctx>>>,
@@ -37,6 +38,7 @@ impl<'ctx> Codegen<'ctx> {
             module,
             builder,
             variables: RefCell::new(HashMap::new()),
+            global_variables: RefCell::new(HashMap::new()),
             gc_alloc_fn,
             gc_free_fn,
             current_memo_ptr: RefCell::new(None),
@@ -45,8 +47,28 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     pub fn compile_program(&self, program: &Program) -> Result<(), String> {
+        // Pass 1: Register all top-level Let statements as global variables
         for stmt in &program.statements {
-            self.compile_statement(stmt)?;
+            if let Statement::Let { name, value } = stmt {
+                let i64_type = self.context.i64_type();
+                let init_val = match value {
+                    Expression::Literal(Literal::Integer(i)) => i64_type.const_int(*i as u64, false),
+                    _ => i64_type.const_int(0, false),
+                };
+                // Only add if not already registered
+                if self.global_variables.borrow().get(name).is_none() {
+                    let global = self.module.add_global(i64_type, None, name);
+                    global.set_initializer(&init_val);
+                    self.global_variables.borrow_mut().insert(name.clone(), global);
+                }
+            }
+        }
+        // Pass 2: Compile all non-Let statements (functions, expressions)
+        for stmt in &program.statements {
+            match stmt {
+                Statement::Let { .. } => {} // already handled above
+                _ => { self.compile_statement(stmt)?; }
+            }
         }
         Ok(())
     }
@@ -63,17 +85,32 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             Statement::Let { name, value } => {
-                let val = self.compile_expression(value)?;
-                let existing_alloca = self.variables.borrow().get(name).cloned();
-                let alloca = match existing_alloca {
-                    Some(a) => a,
-                    None => {
-                        let a = self.create_entry_block_alloca(name);
-                        self.variables.borrow_mut().insert(name.clone(), a);
-                        a
-                    }
-                };
-                let _ = self.builder.build_store(alloca, val);
+                // Check if we're at the top level (outside any function)
+                let in_function = self.builder.get_insert_block().is_some();
+                if in_function {
+                    // Local variable inside a function
+                    let val = self.compile_expression(value)?;
+                    let existing_alloca = self.variables.borrow().get(name).cloned();
+                    let alloca = match existing_alloca {
+                        Some(a) => a,
+                        None => {
+                            let a = self.create_entry_block_alloca(name);
+                            self.variables.borrow_mut().insert(name.clone(), a);
+                            a
+                        }
+                    };
+                    let _ = self.builder.build_store(alloca, val);
+                } else {
+                    // Top-level global variable
+                    let i64_type = self.context.i64_type();
+                    let init_val = match value {
+                        Expression::Literal(Literal::Integer(i)) => i64_type.const_int(*i as u64, false),
+                        _ => i64_type.const_int(0, false), // default 0 for non-const initializers
+                    };
+                    let global = self.module.add_global(i64_type, None, name);
+                    global.set_initializer(&init_val);
+                    self.global_variables.borrow_mut().insert(name.clone(), global);
+                }
             }
             Statement::Expression(expr) => {
                 let _ = self.compile_expression(expr)?;
@@ -557,10 +594,21 @@ impl<'ctx> Codegen<'ctx> {
                 }
             },
             Expression::Identifier(id) => {
-                match self.variables.borrow().get(id) {
-                    Some(alloca) => Ok(self.builder.build_load(self.context.i64_type(), *alloca, id.as_str()).map_err(|e| e.to_string())?),
-                    None => Err(format!("Undefined variable: {}", id)),
+                // First look for a local variable
+                if let Some(alloca) = self.variables.borrow().get(id) {
+                    return Ok(self.builder.build_load(self.context.i64_type(), *alloca, id.as_str()).map_err(|e| e.to_string())?);
                 }
+                // Then look for a global variable
+                if let Some(global) = self.global_variables.borrow().get(id) {
+                    let ptr = global.as_pointer_value();
+                    return Ok(self.builder.build_load(self.context.i64_type(), ptr, id.as_str()).map_err(|e| e.to_string())?);
+                }
+                // Check module-level globals (e.g. argc/argv injected by runtime)
+                if let Some(global) = self.module.get_global(id) {
+                    let ptr = global.as_pointer_value();
+                    return Ok(self.builder.build_load(self.context.i64_type(), ptr, id.as_str()).map_err(|e| e.to_string())?);
+                }
+                Err(format!("Undefined variable: {}", id))
             }
             Expression::PropertyAccess { object, property } => {
                 // Self-hosting ready: Vtable / property offset lookup hooks
@@ -607,6 +655,10 @@ impl<'ctx> Codegen<'ctx> {
                     "-" => Ok(self.builder.build_int_sub(lhs.into_int_value(), rhs.into_int_value(), "subtmp").map_err(|e| e.to_string())?.into()),
                     "*" => Ok(self.builder.build_int_mul(lhs.into_int_value(), rhs.into_int_value(), "multmp").map_err(|e| e.to_string())?.into()),
                     "/" => Ok(self.builder.build_int_signed_div(lhs.into_int_value(), rhs.into_int_value(), "divtmp").map_err(|e| e.to_string())?.into()),
+                    "%" => Ok(self.builder.build_int_signed_rem(lhs.into_int_value(), rhs.into_int_value(), "remtmp").map_err(|e| e.to_string())?.into()),
+                    "&" => Ok(self.builder.build_and(lhs.into_int_value(), rhs.into_int_value(), "andtmp").map_err(|e| e.to_string())?.into()),
+                    "|" => Ok(self.builder.build_or(lhs.into_int_value(), rhs.into_int_value(), "ortmp").map_err(|e| e.to_string())?.into()),
+                    ">>" => Ok(self.builder.build_right_shift(lhs.into_int_value(), rhs.into_int_value(), true, "rshtmp").map_err(|e| e.to_string())?.into()),
                     "<" => {
                         let cmp = self.builder.build_int_compare(inkwell::IntPredicate::SLT, lhs.into_int_value(), rhs.into_int_value(), "cmptmp").map_err(|e| e.to_string())?;
                         let cast = self.builder.build_int_z_extend(cmp, self.context.i64_type(), "booltmp").map_err(|e| e.to_string())?;
@@ -619,6 +671,11 @@ impl<'ctx> Codegen<'ctx> {
                     }
                     "==" => {
                         let cmp = self.builder.build_int_compare(inkwell::IntPredicate::EQ, lhs.into_int_value(), rhs.into_int_value(), "cmptmp").map_err(|e| e.to_string())?;
+                        let cast = self.builder.build_int_z_extend(cmp, self.context.i64_type(), "booltmp").map_err(|e| e.to_string())?;
+                        Ok(cast.into())
+                    }
+                    "!=" => {
+                        let cmp = self.builder.build_int_compare(inkwell::IntPredicate::NE, lhs.into_int_value(), rhs.into_int_value(), "cmptmp").map_err(|e| e.to_string())?;
                         let cast = self.builder.build_int_z_extend(cmp, self.context.i64_type(), "booltmp").map_err(|e| e.to_string())?;
                         Ok(cast.into())
                     }
@@ -663,13 +720,28 @@ impl<'ctx> Codegen<'ctx> {
             }
             Expression::Assign { name, value } => {
                 let val = self.compile_expression(value)?;
-                match self.variables.borrow().get(name) {
-                    Some(alloca) => {
-                        let _ = self.builder.build_store(*alloca, val);
-                        Ok(val)
-                    }
-                    None => Err(format!("Undefined variable in assignment: {}", name)),
+                // Try local variable first
+                if let Some(alloca) = self.variables.borrow().get(name) {
+                    let _ = self.builder.build_store(*alloca, val);
+                    return Ok(val);
                 }
+                // Try global variable
+                if let Some(global) = self.global_variables.borrow().get(name) {
+                    let ptr = global.as_pointer_value();
+                    let _ = self.builder.build_store(ptr, val);
+                    return Ok(val);
+                }
+                // Try module-level global
+                if let Some(global) = self.module.get_global(name) {
+                    let ptr = global.as_pointer_value();
+                    let _ = self.builder.build_store(ptr, val);
+                    return Ok(val);
+                }
+                // Auto-create as local variable if not found (supports implicit assignment)
+                let alloca = self.create_entry_block_alloca(name);
+                self.variables.borrow_mut().insert(name.clone(), alloca);
+                let _ = self.builder.build_store(alloca, val);
+                Ok(val)
             }
             Expression::FunctionCall { name, args } => {
                 if name == "print" {

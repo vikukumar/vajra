@@ -224,6 +224,95 @@ void vajra_gc_free(void* ptr) {
     free(ptr);
 }
 
+void* mem_alloc(size_t size) {
+    return malloc(size);
+}
+
+void mem_free(void* ptr) {
+    free(ptr);
+}
+
+long long mem_read_byte(unsigned char* ptr, long long offset) {
+    return ptr[offset];
+}
+
+void mem_write_byte(unsigned char* ptr, long long offset, long long val) {
+    ptr[offset] = (unsigned char)val;
+}
+
+long long mem_read_word(long long* ptr, long long offset) {
+    return ptr[offset];
+}
+
+void mem_write_word(long long* ptr, long long offset, long long val) {
+    ptr[offset] = val;
+}
+
+#ifdef _WIN32
+void* vajra_alloc_executable(size_t size) {
+    return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+}
+#else
+#include <sys/mman.h>
+void* vajra_alloc_executable(size_t size) {
+    return mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+}
+#endif
+
+long long vajra_call_jit(long long (*fn_ptr)(long long), long long arg) {
+    return fn_ptr(arg);
+}
+
+long long file_open_read(const char* filename) {
+    FILE* f = fopen(filename, "r");
+    return (long long)f;
+}
+
+long long file_open_write(const char* filename) {
+    FILE* f = fopen(filename, "wb");
+    return (long long)f;
+}
+
+long long file_read_char(long long handle) {
+    FILE* f = (FILE*)handle;
+    if (!f) return -1;
+    return fgetc(f);
+}
+
+void file_write_char(long long handle, long long c) {
+    FILE* f = (FILE*)handle;
+    if (f) {
+        fputc((int)c, f);
+    }
+}
+
+void file_close(long long handle) {
+    FILE* f = (FILE*)handle;
+    if (f) {
+        fclose(f);
+    }
+}
+
+void print_string(const char* str) {
+    printf("%s\n", str);
+}
+
+void print_char(long long c) {
+    putchar((int)c);
+}
+
+long long get_helper_addr(long long id) {
+    if (id == 1) return (long long)printf;
+    if (id == 2) return (long long)malloc;
+    if (id == 3) return (long long)free;
+#ifdef _WIN32
+    if (id == 4) return (long long)ExitProcess;
+#else
+    if (id == 4) return (long long)exit;
+#endif
+    return 0;
+}
+
 void vajra_throw_exception(const char* msg) {
     fprintf(stderr, "क्रैश! अनपेक्षित अपवाद (Unhandled Exception): %s\n", msg);
     exit(1);

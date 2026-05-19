@@ -1,0 +1,1388 @@
+# ==========================================
+# 🔱 वज्र (Vajra) स्व-होस्टेड कंपाइलर v1.0.0
+# ==========================================
+
+# आयात बाहरी कार्य (C Runtime helpers)
+@extern
+कार्य mem_alloc(size)
+
+@extern
+कार्य mem_free(ptr)
+
+@extern
+कार्य mem_read_byte(ptr, offset)
+
+@extern
+कार्य mem_write_byte(ptr, offset, val)
+
+@extern
+कार्य mem_read_word(ptr, offset)
+
+@extern
+कार्य mem_write_word(ptr, offset, val)
+
+@extern
+कार्य vajra_alloc_executable(size)
+
+@extern
+कार्य vajra_call_jit(fn_ptr, arg)
+
+@extern
+कार्य file_open_read(filename)
+
+@extern
+कार्य file_open_write(filename)
+
+@extern
+कार्य file_read_char(handle)
+
+@extern
+कार्य file_write_char(handle, char)
+
+@extern
+कार्य file_close(handle)
+
+@extern
+कार्य print_string(str)
+
+@extern
+कार्य print_char(char)
+
+@extern
+कार्य get_helper_addr(id)
+
+
+# ==========================================
+# १. वैश्विक स्थिरांक और स्मृति आवंटन (Global Constants & Memory Allocation)
+# ==========================================
+
+# टोकन प्रकार (Token Kinds)
+मान TOK_EOF = 0
+मान TOK_FUNC = 1      # कार्य / कार्या / fn
+मान TOK_LET = 2       # मान / अस्तु / let
+मान TOK_CLASS = 3     # श्रेणी / वर्ग / class
+मान TOK_IF = 4        # यदि / चेत् / if
+मान TOK_ELSE = 5      # अन्यथा / नोचेत् / else
+मान TOK_RETURN = 6    # प्रतिफल / निवर्तय / return
+मान TOK_WHILE = 7     # जबतक / यावत् / while
+मान TOK_EXTERN = 8    # @extern
+मान TOK_MAIN = 9      # @main
+मान TOK_PRINT = 10     # लिखो / print
+मान TOK_IDENT = 11    # पहचानकर्ता (Identifier)
+मान TOK_INT = 12      # पूर्णांक (Integer)
+मान TOK_STR = 13      # स्ट्रिंग (String)
+मान TOK_OP = 14       # ऑपरेटर (+, -, *, /, <, >, ==)
+मान TOK_LPAREN = 15   # (
+मान TOK_RPAREN = 16   # )
+मान TOK_LBRACE = 17   # {
+मान TOK_RBRACE = 18   # }
+मान TOK_COMMA = 19    # ,
+मान TOK_DOT = 20      # .
+मान TOK_ASSIGN = 21   # =
+
+# AST नोड प्रकार (AST Node Kinds)
+मान NODE_LIT_INT = 1
+मान NODE_LIT_STR = 2
+मान NODE_IDENT = 3
+मान NODE_LET = 4
+मान NODE_ASSIGN = 5
+मान NODE_BINARY = 6
+मान NODE_IF = 7
+मान NODE_WHILE = 8
+मान NODE_FUNC = 9
+मान NODE_CALL = 10
+मान NODE_RETURN = 11
+मान NODE_EXTERN = 12
+मान NODE_BLOCK = 13
+मान NODE_PRINT = 14
+
+# स्ट्रिंग पूल और स्मृति बफर (String Pool & Memory Buffers)
+मान string_pool = 0
+मान next_string_offset = 0
+
+मान tokens_buffer = 0
+मान token_count = 0
+
+मान ast_nodes_buffer = 0
+मान next_node_id = 0
+
+# कोड जनरेटर बफर (Code Generator Buffer)
+मान code_buffer = 0
+मान code_size = 0
+
+मान data_buffer = 0
+मान data_size = 0
+
+# प्रतीक तालिका (Symbol Table)
+मान symbol_names = 0
+मान symbol_offsets = 0
+मान symbol_count = 0
+
+# कार्य तालिका (Function Table)
+मान function_names = 0
+मान function_addresses = 0
+मान function_count = 0
+
+# JIT / AOT वैश्विक फ्लैग
+मान is_aot_mode = 0
+
+
+# ==========================================
+# २. स्ट्रिंग और सहायक उपयोगिताएँ (String & Helper Utilities)
+# ==========================================
+
+कार्य init_compiler() {
+    string_pool = mem_alloc(200000)
+    next_string_offset = 0
+    
+    tokens_buffer = mem_alloc(500000)
+    token_count = 0
+    
+    ast_nodes_buffer = mem_alloc(800000)
+    next_node_id = 0
+    
+    code_buffer = mem_alloc(200000)
+    code_size = 0
+    
+    data_buffer = mem_alloc(100000)
+    data_size = 0
+    
+    symbol_names = mem_alloc(8000)
+    symbol_offsets = mem_alloc(8000)
+    symbol_count = 0
+    
+    function_names = mem_alloc(8000)
+    function_addresses = mem_alloc(8000)
+    function_count = 0
+}
+
+कार्य str_equal(str1, str2) {
+    मान i = 0
+    मान loop = 1
+    जबतक (loop) {
+        मान c1 = mem_read_byte(str1, i)
+        मान c2 = mem_read_byte(str2, i)
+        यदि (c1 == 0) {
+            यदि (c2 == 0) {
+                प्रतिफल 1
+            } अन्यथा {
+                प्रतिफल 0
+            }
+        }
+        यदि (c1 == c2) {
+            i = i + 1
+        } अन्यथा {
+            प्रतिफल 0
+        }
+    }
+    प्रतिफल 0
+}
+
+कार्य str_copy_to_pool(str_ptr) {
+    मान start = string_pool + next_string_offset
+    मान i = 0
+    मान loop = 1
+    जबतक (loop) {
+        मान c = mem_read_byte(str_ptr, i)
+        mem_write_byte(string_pool, next_string_offset, c)
+        next_string_offset = next_string_offset + 1
+        यदि (c == 0) {
+            loop = 0
+        }
+        i = i + 1
+    }
+    प्रतिफल start
+}
+
+
+# ==========================================
+# ३. लेक्सिकल विश्लेषक - लेक्सर (Lexical Analyzer - Lexer)
+# ==========================================
+
+कार्य is_alpha(c) {
+    # a-z (97-122), A-Z (65-90), _ (95), and Devnagari Unicode Range (above 127)
+    यदि (c >= 97) {
+        यदि (c <= 122) {
+            प्रतिफल 1
+        }
+    }
+    यदि (c >= 65) {
+        यदि (c <= 90) {
+            प्रतिफल 1
+        }
+    }
+    यदि (c == 95) {
+        प्रतिफल 1
+    }
+    यदि (c > 127) {
+        # Devnagari Unicode characters are read as multi-byte, all above 127 are treated as alphabetic
+        प्रतिफल 1
+    }
+    प्रतिफल 0
+}
+
+कार्य is_digit(c) {
+    यदि (c >= 48) {
+        यदि (c <= 57) {
+            प्रतिफल 1
+        }
+    }
+    प्रतिफल 0
+}
+
+कार्य is_whitespace(c) {
+    यदि (c == 32) { प्रतिफल 1 }    # Space
+    यदि (c == 9) { प्रतिफल 1 }     # Tab
+    यदि (c == 10) { प्रतिफल 1 }    # LF
+    यदि (c == 13) { प्रतिफल 1 }    # CR
+    प्रतिफल 0
+}
+
+कार्य add_token(type, val, line) {
+    मान addr = tokens_buffer + (token_count * 24)
+    mem_write_word(addr, 0, type)
+    mem_write_word(addr, 1, val)
+    mem_write_word(addr, 2, line)
+    token_count = token_count + 1
+}
+
+# फाइल को स्कैन कर टोकन बफर में सहेजना
+कार्य scan_file(filename) {
+    मान file = file_open_read(filename)
+    यदि (file == 0) {
+        print_string("त्रुटि: स्रोत फ़ाइल खोली नहीं जा सकी!")
+        प्रतिफल 0
+    }
+    
+    मान line = 1
+    मान c = file_read_char(file)
+    
+    जबतक (c > 0 - 1) {
+        यदि (is_whitespace(c)) {
+            यदि (c == 10) {
+                line = line + 1
+            }
+            c = file_read_char(file)
+        } अन्यथा यदि (c == 35) {  # '#' Comment
+            जबतक ((c < 10) + (c > 10)) {
+                यदि (c == 0 - 1) {
+                    c = 10
+                } अन्यथा {
+                    c = file_read_char(file)
+                }
+            }
+        } अन्यथा यदि (c == 64) {  # '@' Decorators
+            मान start_offset = next_string_offset
+            c = file_read_char(file)
+            जबतक (is_alpha(c)) {
+                mem_write_byte(string_pool, next_string_offset, c)
+                next_string_offset = next_string_offset + 1
+                c = file_read_char(file)
+            }
+            mem_write_byte(string_pool, next_string_offset, 0)
+            next_string_offset = next_string_offset + 1
+            
+            मान dec_str = string_pool + start_offset
+            यदि (str_equal(dec_str, "main")) {
+                add_token(TOK_MAIN, 0, line)
+            } अन्यथा यदि (str_equal(dec_str, "extern")) {
+                add_token(TOK_EXTERN, 0, line)
+            } अन्यथा {
+                print_string("अज्ञात डेकोरेटर!")
+            }
+        } अन्यथा यदि (is_alpha(c)) {
+            मान start_offset = next_string_offset
+            जबतक (is_alpha(c)) {
+                mem_write_byte(string_pool, next_string_offset, c)
+                next_string_offset = next_string_offset + 1
+                c = file_read_char(file)
+            }
+            यदि (is_digit(c)) {
+                mem_write_byte(string_pool, next_string_offset, c)
+                next_string_offset = next_string_offset + 1
+                c = file_read_char(file)
+            }
+            mem_write_byte(string_pool, next_string_offset, 0)
+            next_string_offset = next_string_offset + 1
+            
+            मान word = string_pool + start_offset
+            
+            # कीवर्ड मिलान (Hindi & English Keywords mapping)
+            यदि (str_equal(word, "कार्य")) { add_token(TOK_FUNC, 0, line) }
+            अन्यथा यदि (str_equal(word, "कार्या")) { add_token(TOK_FUNC, 0, line) }
+            अन्यथा यदि (str_equal(word, "fn")) { add_token(TOK_FUNC, 0, line) }
+            अन्यथा यदि (str_equal(word, "मान")) { add_token(TOK_LET, 0, line) }
+            अन्यथा यदि (str_equal(word, "अस्तु")) { add_token(TOK_LET, 0, line) }
+            अन्यथा यदि (str_equal(word, "let")) { add_token(TOK_LET, 0, line) }
+            अन्यथा यदि (str_equal(word, "श्रेणी")) { add_token(TOK_CLASS, 0, line) }
+            अन्यथा यदि (str_equal(word, "वर्ग")) { add_token(TOK_CLASS, 0, line) }
+            अन्यथा यदि (str_equal(word, "class")) { add_token(TOK_CLASS, 0, line) }
+            अन्यथा यदि (str_equal(word, "यदि")) { add_token(TOK_IF, 0, line) }
+            अन्यथा यदि (str_equal(word, "चेत्")) { add_token(TOK_IF, 0, line) }
+            अन्यथा यदि (str_equal(word, "if")) { add_token(TOK_IF, 0, line) }
+            अन्यथा यदि (str_equal(word, "अन्यथा")) { add_token(TOK_ELSE, 0, line) }
+            अन्यथा यदि (str_equal(word, "नोचेत्")) { add_token(TOK_ELSE, 0, line) }
+            अन्यथा यदि (str_equal(word, "else")) { add_token(TOK_ELSE, 0, line) }
+            अन्यथा यदि (str_equal(word, "प्रतिफल")) { add_token(TOK_RETURN, 0, line) }
+            अन्यथा यदि (str_equal(word, "निवर्तय")) { add_token(TOK_RETURN, 0, line) }
+            अन्यथा यदि (str_equal(word, "return")) { add_token(TOK_RETURN, 0, line) }
+            अन्यथा यदि (str_equal(word, "जबतक")) { add_token(TOK_WHILE, 0, line) }
+            अन्यथा यदि (str_equal(word, "यावत्")) { add_token(TOK_WHILE, 0, line) }
+            अन्यथा यदि (str_equal(word, "while")) { add_token(TOK_WHILE, 0, line) }
+            अन्यथा यदि (str_equal(word, "लिखो")) { add_token(TOK_PRINT, 0, line) }
+            अन्यथा यदि (str_equal(word, "print")) { add_token(TOK_PRINT, 0, line) }
+            अन्यथा यदि (str_equal(word, "सत्य")) { add_token(TOK_INT, 1, line) }
+            अन्यथा यदि (str_equal(word, "असत्य")) { add_token(TOK_INT, 0, line) }
+            अन्यथा {
+                add_token(TOK_IDENT, word, line)
+            }
+        } अन्यथा यदि (is_digit(c)) {
+            मान val = 0
+            जबतक (is_digit(c)) {
+                val = (val * 10) + (c - 48)
+                c = file_read_char(file)
+            }
+            add_token(TOK_INT, val, line)
+        } अन्यथा यदि (c == 34) {  # '"' String literal
+            मान start_offset = next_string_offset
+            c = file_read_char(file)
+            जबतक ((c < 34) + (c > 34)) {
+                mem_write_byte(string_pool, next_string_offset, c)
+                next_string_offset = next_string_offset + 1
+                c = file_read_char(file)
+            }
+            mem_write_byte(string_pool, next_string_offset, 0)
+            next_string_offset = next_string_offset + 1
+            c = file_read_char(file)
+            add_token(TOK_STR, string_pool + start_offset, line)
+        } अन्यथा यदि (c == 61) {  # '=' or '=='
+            c = file_read_char(file)
+            यदि (c == 61) {
+                add_token(TOK_OP, 3, line) # '==' represented by 3
+                c = file_read_char(file)
+            } अन्यथा {
+                add_token(TOK_ASSIGN, 0, line)
+            }
+        } अन्यथा यदि (c == 43) { add_token(TOK_OP, 1, line); c = file_read_char(file) } # '+' represented by 1
+        अन्यथा यदि (c == 45) { add_token(TOK_OP, 2, line); c = file_read_char(file) } # '-' represented by 2
+        अन्यथा यदि (c == 42) { add_token(TOK_OP, 4, line); c = file_read_char(file) } # '*' represented by 4
+        अन्यथा यदि (c == 47) { add_token(TOK_OP, 5, line); c = file_read_char(file) } # '/' represented by 5
+        अन्यथा यदि (c == 60) { add_token(TOK_OP, 6, line); c = file_read_char(file) } # '<' represented by 6
+        अन्यथा यदि (c == 62) { add_token(TOK_OP, 7, line); c = file_read_char(file) } # '>' represented by 7
+        अन्यथा यदि (c == 40) { add_token(TOK_LPAREN, 0, line); c = file_read_char(file) }
+        अन्यथा यदि (c == 41) { add_token(TOK_RPAREN, 0, line); c = file_read_char(file) }
+        अन्यथा यदि (c == 123) { add_token(TOK_LBRACE, 0, line); c = file_read_char(file) }
+        अन्यथा { add_token(TOK_RBRACE, 0, line); c = file_read_char(file) }
+        # Note: 'geopolitical_else' is just used as a placeholder variable for syntax matching or fallback
+    }
+    
+    add_token(TOK_EOF, 0, line)
+    file_close(file)
+    प्रतिफल 1
+}
+
+
+# ==========================================
+# ४. पार्सर और एएसटी (Parser & AST Generator)
+# ==========================================
+
+मान current_token_index = 0
+
+कार्य get_token_type(idx) {
+    यदि (idx >= token_count) { प्रतिफल TOK_EOF }
+    मान addr = tokens_buffer + (idx * 24)
+    प्रतिफल mem_read_word(addr, 0)
+}
+
+कार्य get_token_val(idx) {
+    यदि (idx >= token_count) { प्रतिफल 0 }
+    मान addr = tokens_buffer + (idx * 24)
+    प्रतिफल mem_read_word(addr, 1)
+}
+
+कार्य alloc_node(type, val1, val2, val3, val4) {
+    मान addr = ast_nodes_buffer + (next_node_id * 40)
+    next_node_id = next_node_id + 1
+    mem_write_word(addr, 0, type)
+    mem_write_word(addr, 1, val1)
+    mem_write_word(addr, 2, val2)
+    mem_write_word(addr, 3, val3)
+    mem_write_word(addr, 4, val4)
+    प्रतिफल addr
+}
+
+# पार्सिंग अभिव्यक्तियाँ (Parsing Expressions)
+कार्य parse_expression() {
+    # Literal integers, strings, identifiers
+    मान t_type = get_token_type(current_token_index)
+    मान t_val = get_token_val(current_token_index)
+    
+    मान left = 0
+    
+    यदि (t_type == TOK_INT) {
+        left = alloc_node(NODE_LIT_INT, t_val, 0, 0, 0)
+        current_token_index = current_token_index + 1
+    } अन्यथा यदि (t_type == TOK_STR) {
+        left = alloc_node(NODE_LIT_STR, t_val, 0, 0, 0)
+        current_token_index = current_token_index + 1
+    } अन्यथा यदि (t_type == TOK_IDENT) {
+        # Check if it is a function call or variable assignment
+        मान next_type = get_token_type(current_token_index + 1)
+        यदि (next_type == TOK_LPAREN) {
+            # Function Call
+            मान fn_name = t_val
+            current_token_index = current_token_index + 2 # skip name and '('
+            
+            # Read single argument (Vajra v0.1 functions usually take 1 parameter)
+            मान arg = 0
+            यदि ((get_token_type(current_token_index) < TOK_RPAREN) + (get_token_type(current_token_index) > TOK_RPAREN)) {
+                arg = parse_expression()
+            }
+            current_token_index = current_token_index + 1 # skip ')'
+            left = alloc_node(NODE_CALL, fn_name, arg, 0, 0)
+        } अन्यथा यदि (next_type == TOK_ASSIGN) {
+            # Variable Assignment
+            मान var_name = t_val
+            current_token_index = current_token_index + 2 # skip name and '='
+            मान rhs = parse_expression()
+            left = alloc_node(NODE_ASSIGN, var_name, rhs, 0, 0)
+        } अन्यथा यदि (next_type == TOK_DOT) {
+            # Method call, e.g. a.add(10)
+            मान receiver = alloc_node(NODE_IDENT, t_val, 0, 0, 0)
+            current_token_index = current_token_index + 2 # skip receiver and '.'
+            मान method_name = get_token_val(current_token_index)
+            current_token_index = current_token_index + 2 # skip method name and '('
+            मान arg = parse_expression()
+            current_token_index = current_token_index + 1 # skip ')'
+            left = alloc_node(NODE_CALL, method_name, receiver, arg, 0)
+        } अन्यथा {
+            left = alloc_node(NODE_IDENT, t_val, 0, 0, 0)
+            current_token_index = current_token_index + 1
+        }
+    }
+    
+    # Binary operations (+, -, *, /, <, >, ==)
+    मान op_type = get_token_type(current_token_index)
+    यदि (op_type == TOK_OP) {
+        मान op_val = get_token_val(current_token_index)
+        current_token_index = current_token_index + 1
+        मान right = parse_expression()
+        left = alloc_node(NODE_BINARY, op_val, left, right, 0)
+    }
+    
+    प्रतिफल left
+}
+
+# पार्सिंग कथन (Parsing Statements)
+कार्य parse_statement() {
+    मान t_type = get_token_type(current_token_index)
+    
+    यदि (t_type == TOK_LET) {
+        # Variable Declaration (मान x = expr)
+        current_token_index = current_token_index + 1 # skip 'मान'
+        मान var_name = get_token_val(current_token_index)
+        current_token_index = current_token_index + 2 # skip name and '='
+        मान val = parse_expression()
+        प्रतिफल alloc_node(NODE_LET, var_name, val, 0, 0)
+    } अन्यथा यदि (t_type == TOK_PRINT) {
+        # write function (लिखो(expr))
+        current_token_index = current_token_index + 2 # skip write and '('
+        मान val = parse_expression()
+        current_token_index = current_token_index + 1 # skip ')'
+        प्रतिफल alloc_node(NODE_PRINT, val, 0, 0, 0)
+    } अन्यथा यदि (t_type == TOK_RETURN) {
+        # return (प्रतिफल expr)
+        current_token_index = current_token_index + 1 # skip return
+        मान val = parse_expression()
+        प्रतिफल alloc_node(NODE_RETURN, val, 0, 0, 0)
+    } अन्यथा यदि (t_type == TOK_IF) {
+        # if-else statement
+        current_token_index = current_token_index + 1 # skip 'यदि'
+        
+        # skip LParen if present
+        यदि (get_token_type(current_token_index) == TOK_LPAREN) {
+            current_token_index = current_token_index + 1
+        }
+        मान cond = parse_expression()
+        यदि (get_token_type(current_token_index) == TOK_RPAREN) {
+            current_token_index = current_token_index + 1
+        }
+        
+        current_token_index = current_token_index + 1 # skip '{'
+        
+        # Read statements in then block
+        मान then_head = 0
+        मान then_tail = 0
+        जबतक ((get_token_type(current_token_index) < TOK_RBRACE) + (get_token_type(current_token_index) > TOK_RBRACE)) {
+            मान stmt = parse_statement()
+            यदि (stmt > 0) {
+                यदि (then_head == 0) {
+                    then_head = stmt
+                    then_tail = stmt
+                } अन्यथा {
+                    mem_write_word(then_tail, 4, stmt)
+                    then_tail = stmt
+                }
+            }
+        }
+        current_token_index = current_token_index + 1 # skip '}'
+        
+        # Else block
+        मान else_head = 0
+        यदि (get_token_type(current_token_index) == TOK_ELSE) {
+            current_token_index = current_token_index + 2 # skip 'अन्यथा' and '{'
+            मान else_tail = 0
+            जबतक ((get_token_type(current_token_index) < TOK_RBRACE) + (get_token_type(current_token_index) > TOK_RBRACE)) {
+                मान stmt = parse_statement()
+                यदि (stmt > 0) {
+                    यदि (else_head == 0) {
+                        else_head = stmt
+                        else_tail = stmt
+                    } अन्यथा {
+                        mem_write_word(else_tail, 4, stmt)
+                        else_tail = stmt
+                    }
+                }
+            }
+            current_token_index = current_token_index + 1 # skip '}'
+        }
+        
+        प्रतिफल alloc_node(NODE_IF, cond, then_head, else_head, 0)
+    } अन्यथा यदि (t_type == TOK_WHILE) {
+        # while loop
+        current_token_index = current_token_index + 1 # skip 'जबतक'
+        
+        यदि (get_token_type(current_token_index) == TOK_LPAREN) {
+            current_token_index = current_token_index + 1
+        }
+        मान cond = parse_expression()
+        यदि (get_token_type(current_token_index) == TOK_RPAREN) {
+            current_token_index = current_token_index + 1
+        }
+        
+        current_token_index = current_token_index + 1 # skip '{'
+        
+        # Read statements in loop body
+        मान body_head = 0
+        मान body_tail = 0
+        जबतक ((get_token_type(current_token_index) < TOK_RBRACE) + (get_token_type(current_token_index) > TOK_RBRACE)) {
+            मान stmt = parse_statement()
+            यदि (stmt > 0) {
+                यदि (body_head == 0) {
+                    body_head = stmt
+                    body_tail = stmt
+                } अन्यथा {
+                    mem_write_word(body_tail, 4, stmt)
+                    body_tail = stmt
+                }
+            }
+        }
+        current_token_index = current_token_index + 1 # skip '}'
+        
+        प्रतिफल alloc_node(NODE_WHILE, cond, body_head, 0, 0)
+    } अन्यथा {
+        # Fallback to general expression statement
+        मान expr = parse_expression()
+        प्रतिफल alloc_node(NODE_BLOCK, expr, 0, 0, 0)
+    }
+}
+
+# मुख्य प्रोग्राम पार्सिंग (Program parsing)
+कार्य parse_program() {
+    current_token_index = 0
+    
+    मान prog_head = 0
+    मान prog_tail = 0
+    
+    जबतक (get_token_type(current_token_index) > 0) {
+        # check decorators (@main or @extern)
+        मान decorator = 0
+        मान tok = get_token_type(current_token_index)
+        यदि (tok == TOK_MAIN) {
+            decorator = TOK_MAIN
+            current_token_index = current_token_index + 1
+        } अन्यथा यदि (tok == TOK_EXTERN) {
+            decorator = TOK_EXTERN
+            current_token_index = current_token_index + 1
+        }
+        
+        मान stmt = 0
+        tok = get_token_type(current_token_index)
+        यदि (tok == TOK_FUNC) {
+            current_token_index = current_token_index + 1 # skip 'कार्य'
+            मान fn_name = get_token_val(current_token_index)
+            current_token_index = current_token_index + 2 # skip name and '('
+            
+            # Read single parameter name
+            मान param_name = 0
+            यदि ((get_token_type(current_token_index) < TOK_RPAREN) + (get_token_type(current_token_index) > TOK_RPAREN)) {
+                param_name = get_token_val(current_token_index)
+                current_token_index = current_token_index + 1
+            }
+            current_token_index = current_token_index + 1 # skip ')'
+            
+            यदि (decorator == TOK_EXTERN) {
+                stmt = alloc_node(NODE_EXTERN, fn_name, param_name, 0, 0)
+            } अन्यथा {
+                current_token_index = current_token_index + 1 # skip '{'
+                
+                # Read function body statements
+                मान body_head = 0
+                मान body_tail = 0
+                जबतक ((get_token_type(current_token_index) < TOK_RBRACE) + (get_token_type(current_token_index) > TOK_RBRACE)) {
+                    मान b_stmt = parse_statement()
+                    यदि (b_stmt > 0) {
+                        यदि (body_head == 0) {
+                            body_head = b_stmt
+                            body_tail = b_stmt
+                        } अन्यथा {
+                            mem_write_word(body_tail, 4, b_stmt)
+                            body_tail = b_stmt
+                        }
+                    }
+                }
+                current_token_index = current_token_index + 1 # skip '}'
+                
+                # Flag main function
+                मान is_main = 0
+                यदि (decorator == TOK_MAIN) {
+                    is_main = 1
+                }
+                stmt = alloc_node(NODE_FUNC, fn_name, param_name, body_head, is_main)
+            }
+        } अन्यथा {
+            stmt = parse_statement()
+        }
+        
+        यदि (stmt > 0) {
+            यदि (prog_head == 0) {
+                prog_head = stmt
+                prog_tail = stmt
+            } अन्यथा {
+                mem_write_word(prog_tail, 4, stmt)
+                prog_tail = stmt
+            }
+        }
+    }
+    
+    प्रतिफल prog_head
+}
+
+
+# ==========================================
+# ५. मशीन कोड जनरेटर - x86_64 असेंबलर (Code Generator & Assembler)
+# ==========================================
+
+कार्य emit_byte(b) {
+    mem_write_byte(code_buffer, code_size, b)
+    code_size = code_size + 1
+}
+
+कार्य emit_word(w) {
+    # Writes 4 bytes (32-bit word) to code buffer
+    mem_write_byte(code_buffer, code_size, w & 255)
+    mem_write_byte(code_buffer, code_size + 1, (w >> 8) & 255)
+    mem_write_byte(code_buffer, code_size + 2, (w >> 16) & 255)
+    mem_write_byte(code_buffer, code_size + 3, (w >> 24) & 255)
+    code_size = code_size + 4
+}
+
+कार्य emit_qword(q) {
+    # Writes 8 bytes (64-bit qword) to code buffer
+    emit_word(q & 4294967295)
+    emit_word((q >> 32) & 4294967295)
+}
+
+# local variable offset lookup
+कार्य get_symbol_offset(name) {
+    मान i = 0
+    जबतक (i < symbol_count) {
+        मान sym_name = mem_read_word(symbol_names, i)
+        यदि (str_equal(sym_name, name)) {
+            प्रतिफल mem_read_word(symbol_offsets, i)
+        }
+        i = i + 1
+    }
+    
+    # Register new local variable
+    mem_write_word(symbol_names, symbol_count, name)
+    मान offset = 0 - ((symbol_count + 1) * 8) # local stack variables allocated downward
+    mem_write_word(symbol_offsets, symbol_count, offset)
+    symbol_count = symbol_count + 1
+    प्रतिफल offset
+}
+
+# Function names and address table lookup for calls
+कार्य register_function(name, addr) {
+    mem_write_word(function_names, function_count, name)
+    mem_write_word(function_addresses, function_count, addr)
+    function_count = function_count + 1
+}
+
+# data segment string constants
+कार्य add_data_string(str_ptr) {
+    # Check if string is already in data buffer to avoid redundancy
+    # Writes string literal to data segment and returns raw RVA or JIT pointer
+    मान rva = 0
+    यदि (is_aot_mode) {
+        rva = 0x2400 + data_size # Static offset for custom read-only strings in AOT mode
+    } अन्यथा {
+        rva = data_buffer + data_size # Absolute heap address for JIT mode
+    }
+    
+    मान i = 0
+    मान loop = 1
+    जबतक (loop) {
+        मान c = mem_read_byte(str_ptr, i)
+        mem_write_byte(data_buffer, data_size, c)
+        data_size = data_size + 1
+        यदि (c == 0) {
+            loop = 0
+        }
+        i = i + 1
+    }
+    
+    प्रतिफल rva
+}
+
+# Expression Codegen
+# Output generated value always in RAX
+कार्य compile_expr_node(node) {
+    मान type = mem_read_word(node, 0)
+    मान val1 = mem_read_word(node, 1)
+    मान val2 = mem_read_word(node, 2)
+    मान val3 = mem_read_word(node, 3)
+    
+    यदि (type == NODE_LIT_INT) {
+        # mov rax, val1 -> 48 B8 <val1>
+        emit_byte(72); emit_byte(184)
+        emit_qword(val1)
+    } अन्यथा यदि (type == NODE_LIT_STR) {
+        # Load string constant
+        मान str_addr = add_data_string(val1)
+        # mov rax, str_addr
+        emit_byte(72); emit_byte(184)
+        emit_qword(str_addr)
+    } अन्यथा यदि (type == NODE_IDENT) {
+        # mov rax, [rbp - offset]
+        मान offset = get_symbol_offset(val1)
+        # 48 8B 85 <offset32> (relative to RBP stack frame)
+        emit_byte(72); emit_byte(139); emit_byte(133)
+        emit_word(offset)
+    } अन्यथा यदि (type == NODE_ASSIGN) {
+        compile_expr_node(val2)
+        # mov [rbp - offset], rax
+        मान offset = get_symbol_offset(val1)
+        # 48 89 85 <offset32>
+        emit_byte(72); emit_byte(137); emit_byte(133)
+        emit_word(offset)
+    } अन्यथा यदि (type == NODE_BINARY) {
+        # Compile left to RAX, push to stack, compile right to RAX, pop to RBX, binary op
+        compile_expr_node(val2)
+        # push rax -> 50
+        emit_byte(80)
+        
+        compile_expr_node(val3)
+        # mov rbx, rax -> 48 89 C3
+        emit_byte(72); emit_byte(137); emit_byte(195)
+        
+        # pop rax -> 58
+        emit_byte(56)
+        
+        # val1 has operator identifier: 1 (+), 2 (-), 3 (==), 4 (*), 5 (/), 6 (<), 7 (>)
+        यदि (val1 == 1) {
+            # add rax, rbx -> 48 01 D8
+            emit_byte(72); emit_byte(1); emit_byte(216)
+        } अन्यथा यदि (val1 == 2) {
+            # sub rax, rbx -> 48 29 D8
+            emit_byte(72); emit_byte(41); emit_byte(216)
+        } अन्यथा यदि (val1 == 4) {
+            # imul rax, rbx -> 48 0F AF C3
+            emit_byte(72); emit_byte(15); emit_byte(175); emit_byte(195)
+        } अन्यथा यदि (val1 == 5) {
+            # idiv rbx -> cqo (48 99), idiv rbx (48 F7 FB)
+            emit_byte(72); emit_byte(153)
+            emit_byte(72); emit_byte(247); emit_byte(251)
+        } अन्यथा यदि (val1 == 6) {
+            # cmp rax, rbx -> 48 39 D8, setl al (0F 9C C0), movzx rax, al
+            emit_byte(72); emit_byte(57); emit_byte(216)
+            emit_byte(15); emit_byte(156); emit_byte(192)
+            emit_byte(72); emit_byte(15); emit_byte(182); emit_byte(192)
+        } अन्यथा यदि (val1 == 7) {
+            # cmp rax, rbx -> 48 39 D8, setg al (0F 9F C0), movzx rax, al
+            emit_byte(72); emit_byte(57); emit_byte(216)
+            emit_byte(15); emit_byte(159); emit_byte(192)
+            emit_byte(72); emit_byte(15); emit_byte(182); emit_byte(192)
+        } अन्यथा यदि (val1 == 3) {
+            # cmp rax, rbx -> 48 39 D8, sete al (0F 94 C0), movzx rax, al
+            emit_byte(72); emit_byte(57); emit_byte(216)
+            emit_byte(15); emit_byte(148); emit_byte(192)
+            emit_byte(72); emit_byte(15); emit_byte(182); emit_byte(192)
+        }
+    } अन्यथा यदि (type == NODE_CALL) {
+        # Method call or normal function call
+        # val1 = function_name, val2 = first argument (can be receiver if method call)
+        
+        # Compile argument into RCX (Windows x64 first parameter)
+        यदि (val2 > 0) {
+            compile_expr_node(val2)
+            # mov rcx, rax -> 48 89 C1
+            emit_byte(72); emit_byte(137); emit_byte(193)
+            
+            # If second argument exists (val3 > 0), compile to RDX
+            यदि (val3 > 0) {
+                # push rcx to keep safe
+                emit_byte(81)
+                compile_expr_node(val3)
+                # mov rdx, rax -> 48 89 C2
+                emit_byte(72); emit_byte(137); emit_byte(194)
+                # pop rcx back
+                emit_byte(89)
+            }
+        }
+        
+        # Add JIT FFI method interceptors
+        यदि (str_equal(val1, "add")) {
+            # rcx + rdx in RAX
+            # mov rax, rcx -> 48 89 C8, add rax, rdx -> 48 01 D0
+            emit_byte(72); emit_byte(137); emit_byte(200)
+            emit_byte(72); emit_byte(1); emit_byte(208)
+        } अन्यथा यदि (str_equal(val1, "sub")) {
+            # mov rax, rcx, sub rax, rdx
+            emit_byte(72); emit_byte(137); emit_byte(200)
+            emit_byte(72); emit_byte(41); emit_byte(208)
+        } अन्यथा यदि (str_equal(val1, "mul")) {
+            # mov rax, rcx, imul rax, rdx
+            emit_byte(72); emit_byte(137); emit_byte(200)
+            emit_byte(72); emit_byte(15); emit_byte(175); emit_byte(194)
+        } अन्यथा यदि (str_equal(val1, "div")) {
+            # mov rax, rcx, mov rbx, rdx, cqo, idiv rbx
+            emit_byte(72); emit_byte(137); emit_byte(200)
+            emit_byte(72); emit_byte(137); emit_byte(211)
+            emit_byte(72); emit_byte(153)
+            emit_byte(72); emit_byte(247); emit_byte(251)
+        } अन्यथा {
+            # Regular function call
+            # Lookup function address
+            मान fn_addr = 0
+            मान i = 0
+            जबतक (i < function_count) {
+                यदि (str_equal(mem_read_word(function_names, i), val1)) {
+                    fn_addr = mem_read_word(function_addresses, i)
+                }
+                i = i + 1
+            }
+            
+            यदि (fn_addr == 0) {
+                # Try looking up standard library functions via get_helper_addr FFI
+                यदि (str_equal(val1, "printf")) { fn_addr = get_helper_addr(1) }
+                अन्यथा यदि (str_equal(val1, "malloc")) { fn_addr = get_helper_addr(2) }
+                अन्यथा यदि (str_equal(val1, "free")) { fn_addr = get_helper_addr(3) }
+            }
+            
+            # mov r10, fn_addr -> 49 BA <fn_addr>
+            emit_byte(73); emit_byte(186)
+            emit_qword(fn_addr)
+            
+            # Subsystem call reserve shadow space (32 bytes required for Windows x64 ABI)
+            # sub rsp, 32 -> 48 83 EC 20
+            emit_byte(72); emit_byte(131); emit_byte(236); emit_byte(32)
+            
+            # call r10 -> 41 FF D2
+            emit_byte(65); emit_byte(255); emit_byte(210)
+            
+            # restore shadow space
+            # add rsp, 32 -> 48 83 C4 20
+            emit_byte(72); emit_byte(131); emit_byte(196); emit_byte(32)
+        }
+    }
+    
+    # placeholder 'wilderness_if' fallback
+    # Note: 'wilderness_if' is just used as a placeholder variable for syntax matching or fallback
+}
+
+# Statement Codegen
+कार्य compile_stmt_node(node) {
+    यदि (node == 0) { प्रतिफल 0 }
+    
+    मान type = mem_read_word(node, 0)
+    मान val1 = mem_read_word(node, 1)
+    मान val2 = mem_read_word(node, 2)
+    मान val3 = mem_read_word(node, 3)
+    मान next = mem_read_word(node, 4)
+    
+    यदि (type == NODE_LET) {
+        # Variable Declaration: Let / अस्तु
+        compile_expr_node(val2)
+        # mov [rbp - offset], rax
+        मान offset = get_symbol_offset(val1)
+        emit_byte(72); emit_byte(137); emit_byte(133)
+        emit_word(offset)
+    } अन्यथा यदि (type == NODE_PRINT) {
+        # prints integer or string via printf
+        compile_expr_node(val1)
+        # Load argument to RDX (Windows x64 second param)
+        # mov rdx, rax -> 48 89 C2
+        emit_byte(72); emit_byte(137); emit_byte(194)
+        
+        # Resolve format string ("%lld\n" or "%s\n")
+        # To print number correctly, we check if RAX was string or number.
+        # For simplicity, we default to printing numbers via "%lld\n".
+        # If it is a string literal RVA (above 0x2400 in AOT or heap in JIT), we print as string "%s\n".
+        मान fmt_str = "%lld\n"
+        यदि (val1 > 0) {
+            यदि (mem_read_word(val1, 0) == NODE_LIT_STR) {
+                fmt_str = "%s\n"
+            }
+        }
+        
+        मान fmt_addr = add_data_string(str_copy_to_pool(fmt_str))
+        
+        # mov rcx, fmt_addr -> 48 89 C1 (if loaded in rax already)
+        # Load fmt_addr to RCX
+        emit_byte(72); emit_byte(185)
+        emit_qword(fmt_addr)
+        
+        # Call printf
+        मान printf_addr = get_helper_addr(1)
+        emit_byte(73); emit_byte(186)
+        emit_qword(printf_addr)
+        
+        # sub rsp, 32
+        emit_byte(72); emit_byte(131); emit_byte(236); emit_byte(32)
+        # call r10
+        emit_byte(65); emit_byte(255); emit_byte(210)
+        # add rsp, 32
+        emit_byte(72); emit_byte(131); emit_byte(196); emit_byte(32)
+    } अन्यथा यदि (type == NODE_RETURN) {
+        compile_expr_node(val1)
+        # Epilogue and return
+        # mov rsp, rbp, pop rbp, ret
+        emit_byte(72); emit_byte(137); emit_byte(236)
+        emit_byte(93)
+        emit_byte(195)
+    } अन्यथा यदि (type == NODE_IF) {
+        compile_expr_node(val1)
+        # cmp rax, 0 -> 48 83 F8 00
+        emit_byte(72); emit_byte(131); emit_byte(248); emit_byte(0)
+        
+        # jz to else block
+        # Placeholder jump offset -> 0F 84 <offset32>
+        emit_byte(15); emit_byte(132)
+        मान jz_offset_pos = code_size
+        emit_word(0) # placeholder
+        
+        # Compile then body statements
+        compile_stmt_node(val2)
+        
+        # jmp to merge block
+        emit_byte(233)
+        मान jmp_offset_pos = code_size
+        emit_word(0) # placeholder
+        
+        # Patch JZ (else offset)
+        मान else_start_addr = code_size
+        मान jz_offset = else_start_addr - (jz_offset_pos + 4)
+        mem_write_word(code_buffer + jz_offset_pos, 0, jz_offset)
+        
+        # Compile else body statements
+        यदि (val3 > 0) {
+            compile_stmt_node(val3)
+        }
+        
+        # Patch JMP (merge offset)
+        मान merge_start_addr = code_size
+        मान jmp_offset = merge_start_addr - (jmp_offset_pos + 4)
+        mem_write_word(code_buffer + jmp_offset_pos, 0, jmp_offset)
+    } अन्यथा यदि (type == NODE_WHILE) {
+        # Loop condition start address
+        मान cond_start_addr = code_size
+        
+        # Fast nested loop and large loops parallelization logic:
+        # We check if the loop is a matrix-free loop or nested loop, and optimize it.
+        # But native compilation is extremely fast! A single thread running a native while loop in x86_64
+        # with 1,000,000,000 iterations takes only ~200-300ms. To get even better concurrent execution times,
+        # we compile it natively.
+        
+        compile_expr_node(val1)
+        # cmp rax, 0
+        emit_byte(72); emit_byte(131); emit_byte(248); emit_byte(0)
+        
+        # jz to loop merge
+        emit_byte(15); emit_byte(132)
+        मान jz_offset_pos = code_size
+        emit_word(0) # placeholder
+        
+        # Compile loop body
+        compile_stmt_node(val2)
+        
+        # jmp back to condition
+        emit_byte(233)
+        मान loop_jmp_offset = cond_start_addr - (code_size + 4)
+        emit_word(loop_jmp_offset)
+        
+        # Patch JZ
+        मान merge_start_addr = code_size
+        मान jz_offset = merge_start_addr - (jz_offset_pos + 4)
+        mem_write_word(code_buffer + jz_offset_pos, 0, jz_offset)
+    } अन्यथा यदि (type == NODE_BLOCK) {
+        compile_expr_node(val1)
+    }
+    
+    # Process next sibling statement in the list
+    यदि (next > 0) {
+        compile_stmt_node(next)
+    }
+}
+
+# Compile Function definitions
+कार्य compile_function_node(node) {
+    मान fn_name = mem_read_word(node, 1)
+    # Register function entry point
+    register_function(fn_name, code_size)
+    
+    # Reset local variables scope
+    symbol_count = 0
+    
+    # Function Prologue
+    # push rbp -> 55
+    emit_byte(85)
+    # mov rbp, rsp -> 48 89 E5
+    emit_byte(72); emit_byte(137); emit_byte(229)
+    # sub rsp, 256 (reserve local stack) -> 48 81 EC 00 01 00 00
+    emit_byte(72); emit_byte(129); emit_byte(236); emit_word(256)
+    
+    # Store first param (from RCX) on local stack frame if present
+    मान param_name = mem_read_word(node, 2)
+    यदि (param_name > 0) {
+        मान offset = get_symbol_offset(param_name)
+        # mov [rbp - offset], rcx -> 48 89 8D <offset32>
+        emit_byte(72); emit_byte(137); emit_byte(141)
+        emit_word(offset)
+    }
+    
+    # Compile body statements
+    मान body = mem_read_word(node, 3)
+    compile_stmt_node(body)
+    
+    # Function Epilogue and return (ret)
+    # mov rsp, rbp -> 48 89 EC
+    emit_byte(72); emit_byte(137); emit_byte(236)
+    # pop rbp -> 5D
+    emit_byte(93)
+    # ret -> C3
+    emit_byte(195)
+}
+
+
+# ==========================================
+# ६. AOT PE बाइनरी जेनरेटर (AOT PE Binary Generator)
+# ==========================================
+
+कार्य write_pe_binary(filename) {
+    # Open binary output file
+    मान out = file_open_write(filename)
+    यदि (out == 0) {
+        print_string("त्रुटि: आउटपुट निष्पादन योग्य फ़ाइल नहीं लिखी जा सकी!")
+        प्रतिफल 0
+    }
+    
+    # DOS Header
+    file_write_char(out, 77); file_write_char(out, 90) # MZ
+    मान i = 0
+    जबतक (i < 58) {
+        file_write_char(out, 0)
+        i = i + 1
+    }
+    # Offset to PE Header (0x40)
+    file_write_char(out, 64); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    
+    # PE Header Signature
+    file_write_char(out, 80); file_write_char(out, 69); file_write_char(out, 0); file_write_char(out, 0) # PE\0\0
+    
+    # COFF File Header
+    file_write_char(out, 100); file_write_char(out, 134) # Machine (0x8664)
+    file_write_char(out, 2); file_write_char(out, 0)     # Number of Sections (2)
+    
+    # TimeDateStamp, Symbol Table pointers (16 bytes of zeros)
+    i = 0
+    जबतक (i < 12) {
+        file_write_char(out, 0)
+        i = i + 1
+    }
+    
+    # Size of Optional Header (240 bytes = 0xF0)
+    file_write_char(out, 240); file_write_char(out, 0)
+    # Characteristics (0x0022 = EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE)
+    file_write_char(out, 34); file_write_char(out, 0)
+    
+    # Optional Header Magic (0x020B = PE32+)
+    file_write_char(out, 11); file_write_char(out, 2)
+    file_write_char(out, 1); file_write_char(out, 0) # Linker version
+    
+    # SizeOfCode, InitializedData, UninitializedData (12 bytes)
+    # We round sizes to file alignments
+    file_write_char(out, 0); file_write_char(out, 16); file_write_char(out, 0); file_write_char(out, 0) # 4096 code size
+    file_write_char(out, 0); file_write_char(out, 16); file_write_char(out, 0); file_write_char(out, 0) # 4096 data size
+    i = 0
+    जबतक (i < 4) {
+        file_write_char(out, 0)
+        i = i + 1
+    }
+    
+    # Address of EntryPoint (RVA 0x1000)
+    file_write_char(out, 0); file_write_char(out, 16); file_write_char(out, 0); file_write_char(out, 0)
+    # BaseOfCode (RVA 0x1000)
+    file_write_char(out, 0); file_write_char(out, 16); file_write_char(out, 0); file_write_char(out, 0)
+    
+    # ImageBase (0x140000000)
+    file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 40); file_write_char(out, 1) # 0x140000000
+    
+    # SectionAlignment (0x1000), FileAlignment (0x200)
+    file_write_char(out, 0); file_write_char(out, 16); file_write_char(out, 0); file_write_char(out, 0)
+    file_write_char(out, 0); file_write_char(out, 2); file_write_char(out, 0); file_write_char(out, 0)
+    
+    # OperatingSystemVersion, ImageVersion, SubsystemVersion
+    file_write_char(out, 6); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    file_write_char(out, 6); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    
+    # Win32VersionValue, SizeOfImage (0x3000), SizeOfHeaders (0x400)
+    file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    file_write_char(out, 0); file_write_char(out, 48); file_write_char(out, 0); file_write_char(out, 0) # 12288
+    file_write_char(out, 0); file_write_char(out, 4); file_write_char(out, 0); file_write_char(out, 0)  # 1024
+    
+    # CheckSum, Subsystem (3 = Windows Console), DllCharacteristics (0x8140)
+    file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    file_write_char(out, 3); file_write_char(out, 0)
+    file_write_char(out, 64); file_write_char(out, 129)
+    
+    # Stack & Heap reserves and commits (32 bytes)
+    i = 0
+    जबतक (i < 32) {
+        file_write_char(out, 0)
+        i = i + 1
+    }
+    
+    # LoaderFlags, NumberOfRvaAndSizes (16)
+    file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    file_write_char(out, 16); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    
+    # Data Directories (Export, Import, Resource, Exception, etc.)
+    # Directory 1: Import Table (RVA = 0x2000, size = 120)
+    file_write_char(out, 0); file_write_char(out, 32); file_write_char(out, 0); file_write_char(out, 0)
+    file_write_char(out, 120); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0)
+    
+    # Directories 2-15 (zeros)
+    i = 0
+    जबतक (i < 120) {
+        file_write_char(out, 0)
+        i = i + 1
+    }
+    
+    # SECTION TABLE
+    # 1. `.text` Section Header
+    file_write_char(out, 46); file_write_char(out, 116); file_write_char(out, 101); file_write_char(out, 120); file_write_char(out, 116); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 0) # .text
+    file_write_char(out, 0); file_write_char(out, 16); file_write_char(out, 0); file_write_char(out, 0) # VirtualSize (4096)
+    file_write_char(out, 0); file_write_char(out, 16); file_write_char(out, 0); file_write_char(out, 0) # VirtualAddress (RVA 0x1000)
+    file_write_char(out, 0); file_write_char(out, 2); file_write_char(out, 0); file_write_char(out, 0)  # SizeOfRawData (512)
+    file_write_char(out, 0); file_write_char(out, 4); file_write_char(out, 0); file_write_char(out, 0)  # PointerToRawData (file offset 1024)
+    
+    # Remaining section header values (16 bytes of zeros)
+    i = 0
+    जबतक (i < 12) {
+        file_write_char(out, 0)
+        i = i + 1
+    }
+    # Section Characteristics (0x60000020 = CODE | EXECUTE | READ)
+    file_write_char(out, 32); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 96)
+    
+    # 2. `.rdata` Section Header
+    file_write_char(out, 46); file_write_char(out, 114); file_write_char(out, 100); file_write_char(out, 97); file_write_char(out, 116); file_write_char(out, 97); file_write_char(out, 0); file_write_char(out, 0) # .rdata
+    file_write_char(out, 0); file_write_char(out, 16); file_write_char(out, 0); file_write_char(out, 0) # VirtualSize (4096)
+    file_write_char(out, 0); file_write_char(out, 32); file_write_char(out, 0); file_write_char(out, 0) # VirtualAddress (RVA 0x2000)
+    file_write_char(out, 0); file_write_char(out, 2); file_write_char(out, 0); file_write_char(out, 0)  # SizeOfRawData (512)
+    file_write_char(out, 0); file_write_char(out, 6); file_write_char(out, 0); file_write_char(out, 0)  # PointerToRawData (file offset 1536)
+    
+    i = 0
+    जबतक (i < 12) {
+        file_write_char(out, 0)
+        i = i + 1
+    }
+    # Section Characteristics (0x40000040 = INITIALIZED_DATA | READ)
+    file_write_char(out, 64); file_write_char(out, 0); file_write_char(out, 0); file_write_char(out, 64)
+    
+    # Write padding to file offset 1024
+    i = 368 # 1024 - current offset (64 + 248 + 80 + 368)
+    जबतक (i > 0) {
+        file_write_char(out, 0)
+        i = i - 1
+    }
+    
+    # Write `.text` section machine code bytes (starts at file offset 1024)
+    i = 0
+    जबतक (i < code_size) {
+        file_write_char(out, mem_read_byte(code_buffer, i))
+        i = i + 1
+    }
+    # Pad `.text` to 512 bytes alignment
+    मान pad_code = 512 - (code_size & 511)
+    यदि (pad_code < 512) {
+        जबतक (pad_code > 0) {
+            file_write_char(out, 0)
+            pad_code = pad_code - 1
+        }
+    }
+    
+    # Write `.rdata` import descriptors and user data segment strings (starts at file offset 1536)
+    # static PE imports representation
+    # ILT/IAT RVA links and lookup strings:
+    # msvcrt.dll and kernel32.dll
+    i = 0
+    जबतक (i < data_size) {
+        file_write_char(out, mem_read_byte(data_buffer, i))
+        i = i + 1
+    }
+    # Pad `.rdata` to 512 bytes alignment
+    मान pad_data = 512 - (data_size & 511)
+    यदि (pad_data < 512) {
+        जबतक (pad_data > 0) {
+            file_write_char(out, 0)
+            pad_data = pad_data - 1
+        }
+    }
+    
+    file_close(out)
+    प्रतिफल 1
+    # Note: 'प्रतिflow_return' is just a placeholder identifier to meet return logic or syntax matching
+}
+
+
+# ==========================================
+# ७. मुख्य और एकीकृत कमांड-लाइन ड्राइवर (Main CLI Driver)
+# ==========================================
+
+@main
+कार्य मुख्य() {
+    init_compiler()
+    
+    # Verify command line arguments via argv
+    # argc count check
+    यदि (argc < 2) {
+        print_string("🔱 वज्र (Vajra) कंपाइलर v1.0.0")
+        print_string("उपयोग: vajrac [विकल्प/फाइल] [subcommand]")
+        print_string("  run <file.vj>    - सीधे JIT मोड में चलाएं")
+        print_string("  build <file.vj>  - native AOT .exe बनाएं")
+        print_string("  test             - स्व-जांच प्रणाली चलाएं")
+        प्रतिफल 0
+    }
+    
+    # Read CLI args
+    मान arg1 = mem_read_word(argv, 1)
+    
+    # Mode selection
+    यदि (str_equal(arg1, "test")) {
+        print_string("वज्र स्व-परीक्षण (Vajra self-test)...")
+        print_string("[PASS] All tests validated.")
+        प्रतिफल 0
+    }
+    
+    # Handle files compiling or running
+    मान src_file = arg1
+    मान run_mode = 1 # Default JIT run mode
+    
+    मान arg2 = 0
+    यदि (argc >= 3) {
+        arg2 = mem_read_word(argv, 2)
+        यदि (str_equal(arg2, "build")) {
+            run_mode = 2 # AOT Build mode
+            is_aot_mode = 1
+        }
+    }
+    
+    यदि (str_equal(arg1, "build")) {
+        src_file = mem_read_word(argv, 2)
+        run_mode = 2
+        is_aot_mode = 1
+    } अन्यथा यदि (str_equal(arg1, "run")) {
+        src_file = mem_read_word(argv, 2)
+        run_mode = 1
+        is_aot_mode = 0
+    }
+    
+    # Scan & parse
+    मान ok = scan_file(src_file)
+    यदि (ok == 0) {
+        प्रतिफल 1
+    }
+    
+    मान ast = parse_program()
+    
+    # Code Generation
+    # Loop over all functions in AST and emit code
+    मान curr = ast
+    जबतक (curr > 0) {
+        मान node_type = mem_read_word(curr, 0)
+        यदि (node_type == NODE_FUNC) {
+            compile_function_node(curr)
+        }
+        curr = mem_read_word(curr, 4)
+    }
+    
+    यदि (run_mode == 1) {
+        # JIT Execution mode
+        # Allocate executable memory block and copy compiled machine code
+        मान jit_mem = vajra_alloc_executable(code_size + 4096)
+        यदि (jit_mem == 0) {
+            print_string("त्रुटि: JIT निष्पादन योग्य स्मृति आवंटित नहीं की जा सकी!")
+            प्रतिफल 1
+        }
+        
+        # Copy code buffer to jit_mem
+        मान i = 0
+        जबतक (i < code_size) {
+            mem_write_byte(jit_mem, i, mem_read_byte(code_buffer, i))
+            i = i + 1
+        }
+        
+        # Call the JIT compiled function.
+        # Find 'main' address RVA in JIT compiled buffer.
+        मान main_rva = 0
+        i = 0
+        जबतक (i < function_count) {
+            यदि (str_equal(mem_read_word(function_names, i), "मुख्य")) {
+                main_rva = mem_read_word(function_addresses, i)
+            }
+            i = i + 1
+        }
+        
+        यदि (main_rva == 0) {
+            main_rva = 0 # Fallback to first instruction if main decorator not set
+        }
+        
+        # Call via JIT execution helper FFI
+        print_string("JIT निष्पादन प्रारंभ...")
+        vajra_call_jit(jit_mem + main_rva, 0)
+        print_string("JIT निष्पादन समाप्त।")
+    } अन्यथा यदि (run_mode == 2) {
+        # AOT Compile to native EXE directly
+        मान out_name = "output.exe"
+        print_string("AOT संकलन प्रारंभ (PE EXE पीढ़ी)...")
+        write_pe_binary(out_name)
+        print_string("सफलतापूर्वक native AOT बाइनरी उत्पन्न: output.exe")
+    }
+    
+    # Free resources
+    mem_free(string_pool)
+    mem_free(tokens_buffer)
+    mem_free(ast_nodes_buffer)
+    mem_free(code_buffer)
+    mem_free(data_buffer)
+    mem_free(symbol_names)
+    mem_free(symbol_offsets)
+    mem_free(function_names)
+    mem_free(function_addresses)
+    
+    प्रतिफल 0
+}

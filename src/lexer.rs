@@ -52,16 +52,21 @@ pub enum TokenKind {
     RParen,     // )
     LBrace,     // {
     RBrace,     // }
-    Assign,     // =
-    Plus,       // +
-    Minus,      // -
-    Star,       // *
-    Slash,      // /
-    LessThan,   // <
-    GreaterThan,// >
-    Equal,      // ==
-    LessEqual,  // <=
-    GreaterEqual,// >=
+    Assign,       // =
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    Slash,        // /
+    Percent,      // %
+    Ampersand,    // &
+    Pipe,         // |
+    RightShift,   // >>
+    LessThan,     // <
+    GreaterThan,  // >
+    Equal,        // ==
+    LessEqual,    // <=
+    GreaterEqual, // >=
+    NotEqual,     // !=
     
     // Whitespace/Flow
     Newline,
@@ -244,17 +249,31 @@ impl<'a> Lexer<'a> {
                 }
             }
             ">" => {
-                if let Some(&"=") = self.peek() {
+                if let Some(&">") = self.peek() {
+                    self.advance();
+                    TokenKind::RightShift
+                } else if let Some(&"=") = self.peek() {
                     self.advance();
                     TokenKind::GreaterEqual
                 } else {
                     TokenKind::GreaterThan
                 }
             }
+            "!" => {
+                if let Some(&"=") = self.peek() {
+                    self.advance();
+                    TokenKind::NotEqual
+                } else {
+                    panic!("Unexpected character: ! at line {}, col {}", line, col);
+                }
+            }
             "+" => TokenKind::Plus,
             "-" => TokenKind::Minus,
             "*" => TokenKind::Star,
             "/" => TokenKind::Slash,
+            "%" => TokenKind::Percent,
+            "&" => TokenKind::Ampersand,
+            "|" => TokenKind::Pipe,
             "\n" => TokenKind::Newline,
             _ if g.chars().next().unwrap().is_alphabetic() || g == "_" => {
                 let mut id = g.to_string();
@@ -268,7 +287,27 @@ impl<'a> Lexer<'a> {
             _ if g.chars().next().unwrap().is_numeric() => {
                 let mut num = g.to_string();
                 num.push_str(&self.read_number());
-                if num.contains('.') {
+                // Handle hex literals: 0x...
+                if num == "0" {
+                    if let Some(&"x") = self.peek() {
+                        self.advance(); // consume 'x'
+                        let mut hex_str = String::new();
+                        while let Some(g) = self.peek() {
+                            let c = g.chars().next().unwrap();
+                            if c.is_ascii_hexdigit() {
+                                hex_str.push_str(self.advance().unwrap());
+                            } else {
+                                break;
+                            }
+                        }
+                        let val = i64::from_str_radix(&hex_str, 16).unwrap_or(0);
+                        TokenKind::Integer(val)
+                    } else if num.contains('.') {
+                        TokenKind::Float(num.parse().unwrap_or(0.0))
+                    } else {
+                        TokenKind::Integer(0)
+                    }
+                } else if num.contains('.') {
                     TokenKind::Float(num.parse().unwrap_or(0.0))
                 } else {
                     match num.parse::<i64>() {

@@ -358,6 +358,15 @@ impl<'a> Parser<'a> {
                 self.next_token();
                 expr
             }
+            TokenKind::LParen => {
+                self.next_token(); // skip '('
+                let expr = self.parse_expression(0);
+                if self.cur_token.kind != TokenKind::RParen {
+                    panic!("Expected ')' after expression, got {:?}", self.cur_token);
+                }
+                self.next_token(); // skip ')'
+                expr
+            }
             _ => panic!("Unexpected token in expression: {:?}", self.cur_token),
         };
 
@@ -439,17 +448,24 @@ impl<'a> Parser<'a> {
                     }
                 }
                 TokenKind::Plus | TokenKind::Minus | TokenKind::Star | TokenKind::Slash |
-                TokenKind::LessThan | TokenKind::GreaterThan | TokenKind::Equal | TokenKind::LessEqual | TokenKind::GreaterEqual => {
+                TokenKind::Percent | TokenKind::Ampersand | TokenKind::Pipe | TokenKind::RightShift |
+                TokenKind::LessThan | TokenKind::GreaterThan | TokenKind::Equal |
+                TokenKind::LessEqual | TokenKind::GreaterEqual | TokenKind::NotEqual => {
                     let op = match &self.cur_token.kind {
                         TokenKind::Plus => "+",
                         TokenKind::Minus => "-",
                         TokenKind::Star => "*",
                         TokenKind::Slash => "/",
+                        TokenKind::Percent => "%",
+                        TokenKind::Ampersand => "&",
+                        TokenKind::Pipe => "|",
+                        TokenKind::RightShift => ">>",
                         TokenKind::LessThan => "<",
                         TokenKind::GreaterThan => ">",
                         TokenKind::Equal => "==",
                         TokenKind::LessEqual => "<=",
                         TokenKind::GreaterEqual => ">=",
+                        TokenKind::NotEqual => "!=",
                         _ => unreachable!(),
                     }.to_string();
                     self.next_token(); // skip operator
@@ -664,28 +680,36 @@ impl<'a> Parser<'a> {
                 self.next_token();
             }
 
-            if self.cur_token.kind != TokenKind::LBrace {
-                panic!("Expected '{{' after else keyword, got {:?}", self.cur_token.kind);
-            }
-            self.next_token(); // skip '{'
-
-            let mut body = Vec::new();
-            while self.cur_token.kind != TokenKind::RBrace && self.cur_token.kind != TokenKind::EOF {
-                if self.cur_token.kind == TokenKind::Newline || self.cur_token.kind == TokenKind::Semicolon {
-                    self.next_token();
-                    continue;
+            // Support 'else if' chaining
+            if self.cur_token.kind == TokenKind::If {
+                // Parse the else-if as a nested if statement
+                if let Some(nested_if) = self.parse_statement() {
+                    else_body = Some(vec![nested_if]);
                 }
-                if let Some(stmt) = self.parse_statement() {
-                    body.push(stmt);
-                } else {
-                    self.next_token();
+            } else {
+                if self.cur_token.kind != TokenKind::LBrace {
+                    panic!("Expected '{{' after else keyword, got {:?}", self.cur_token.kind);
                 }
-            }
+                self.next_token(); // skip '{'
 
-            if self.cur_token.kind == TokenKind::RBrace {
-                self.next_token(); // skip '}'
+                let mut body = Vec::new();
+                while self.cur_token.kind != TokenKind::RBrace && self.cur_token.kind != TokenKind::EOF {
+                    if self.cur_token.kind == TokenKind::Newline || self.cur_token.kind == TokenKind::Semicolon {
+                        self.next_token();
+                        continue;
+                    }
+                    if let Some(stmt) = self.parse_statement() {
+                        body.push(stmt);
+                    } else {
+                        self.next_token();
+                    }
+                }
+
+                if self.cur_token.kind == TokenKind::RBrace {
+                    self.next_token(); // skip '}'
+                }
+                else_body = Some(body);
             }
-            else_body = Some(body);
         }
 
         Some(Statement::If { condition, then_body, else_body })
