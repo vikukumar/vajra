@@ -82,30 +82,30 @@
 
 कार्या read_i64(p) {
     मान val = 0
-    मान i = 0
-    जबतक (i < 8) {
-        मान b = read_byte(p + i)
+    मान idx = 0
+    जबतक (idx < 8) {
+        मान b = read_byte(p + idx)
         मान mult = 1
         मान j = 0
-        जबतक (j < i) {
+        जबतक (j < idx) {
             mult = mult * 256
             j = j + 1
         }
         val = val + b * mult
-        i = i + 1
+        idx = idx + 1
     }
     प्रतिफल val
 }
 
 कार्या write_i64(p, val) {
-    मान i = 0
+    मान idx = 0
     मान temp = val
-    जबतक (i < 8) {
+    जबतक (idx < 8) {
         मान div = temp / 256
         मान b = temp - div * 256
-        write_byte(p + i, b)
+        write_byte(p + idx, b)
         temp = div
-        i = i + 1
+        idx = idx + 1
     }
 }
 
@@ -563,83 +563,88 @@
     next_char(ctx)
 
     मान tok = next_token(ctx)
-    जबतक (tok != 0) {
-        यदि (tok == 13) { # आयात
-            tok = next_token(ctx)
-            यदि (tok == 16) {
-                pass1_scan_file(read_i64(ctx + 24), out_file, scanned_files, scanned_files_count_ptr)
-            }
+    मान loop_scan = 1
+    जबतक (loop_scan) {
+        यदि (tok == 0) {
+            loop_scan = 0
         } अन्यथा {
-            यदि (tok == 12) { # @extern
+            यदि (tok == 13) { # आयात
                 tok = next_token(ctx)
-                यदि (tok == 1) {
-                    tok = next_token(ctx)
-                    यदि (tok == 14) {
-                        मान func_name = malloc(256)
-                        strcpy(func_name, read_i64(ctx + 24))
-                        tok = next_token(ctx) # '('
-                        tok = next_token(ctx)
-                        
-                        लिखो_शब्द(out_file, "extern long long ")
-                        लिखो_शब्द(out_file, func_name)
-                        लिखो_शब्द(out_file, "(")
-                        
-                        मान param_count = 0
-                        मान loop_param = 1
-                        जबतक (loop_param) {
-                            यदि (tok == 21) { loop_param = 0 }
-                            यदि (tok == 0) { loop_param = 0 }
-                            यदि (loop_param) {
-                                यदि (tok == 14) {
-                                    यदि (param_count > 0) {
-                                        लिखो_शब्द(out_file, ", ")
-                                    }
-                                    लिखो_शब्द(out_file, "long long ")
-                                    param_count = param_count + 1
-                                }
-                                tok = next_token(ctx)
-                            }
-                        }
-                        लिखो_शब्द(out_file, ");\n")
-                        free(func_name)
-                    }
+                यदि (tok == 16) {
+                    pass1_scan_file(read_i64(ctx + 24), out_file, scanned_files, scanned_files_count_ptr)
                 }
             } अन्यथा {
-                यदि (tok == 1) { # function
+                यदि (tok == 12) { # @extern
                     tok = next_token(ctx)
-                    यदि (tok == 14) {
-                        मान func_name = malloc(256)
-                        strcpy(func_name, read_i64(ctx + 24))
-                        tok = next_token(ctx) # '('
+                    यदि (tok == 1) {
                         tok = next_token(ctx)
-                        
-                        लिखो_शब्द(out_file, "long long ")
-                        लिखो_शब्द(out_file, func_name)
-                        लिखो_शब्द(out_file, "(")
-                        
-                        मान param_count = 0
-                        मान loop_param = 1
-                        जबतक (loop_param) {
-                            यदि (tok == 21) { loop_param = 0 }
-                            यदि (tok == 0) { loop_param = 0 }
-                            यदि (loop_param) {
-                                यदि (tok == 14) {
-                                    यदि (param_count > 0) {
-                                        लिखो_शब्द(out_file, ", ")
+                        यदि (tok == 14) {
+                            मान func_name = malloc(256)
+                            strcpy(func_name, read_i64(ctx + 24))
+                            tok = next_token(ctx) # '('
+                            tok = next_token(ctx)
+                            
+                            लिखो_शब्द(out_file, "extern long long ")
+                            लिखो_शब्द(out_file, func_name)
+                            लिखो_शब्द(out_file, "(")
+                            
+                            मान param_count = 0
+                            मान loop_param = 1
+                            जबतक (loop_param) {
+                                यदि (tok == 21) { loop_param = 0 }
+                                यदि (tok == 0) { loop_param = 0 }
+                                यदि (loop_param) {
+                                    यदि (tok == 14) {
+                                        यदि (param_count > 0) {
+                                            लिखो_शब्द(out_file, ", ")
+                                        }
+                                        लिखो_शब्द(out_file, "long long ")
+                                        param_count = param_count + 1
                                     }
-                                    लिखो_शब्द(out_file, "long long ")
-                                    param_count = param_count + 1
+                                    tok = next_token(ctx)
                                 }
-                                tok = next_token(ctx)
                             }
+                            लिखो_शब्द(out_file, ");\n")
+                            free(func_name)
                         }
-                        लिखो_शब्द(out_file, ");\n")
-                        free(func_name)
+                    }
+                } अन्यथा {
+                    यदि (tok == 1) { # function
+                        tok = next_token(ctx)
+                        यदि (tok == 14) {
+                            मान func_name = malloc(256)
+                            strcpy(func_name, read_i64(ctx + 24))
+                            tok = next_token(ctx) # '('
+                            tok = next_token(ctx)
+                            
+                            लिखो_शब्द(out_file, "long long ")
+                            लिखो_शब्द(out_file, func_name)
+                            लिखो_शब्द(out_file, "(")
+                            
+                            मान param_count = 0
+                            मान loop_param = 1
+                            जबतक (loop_param) {
+                                यदि (tok == 21) { loop_param = 0 }
+                                यदि (tok == 0) { loop_param = 0 }
+                                यदि (loop_param) {
+                                    यदि (tok == 14) {
+                                        यदि (param_count > 0) {
+                                            लिखो_शब्द(out_file, ", ")
+                                        }
+                                        लिखो_शब्द(out_file, "long long ")
+                                        param_count = param_count + 1
+                                    }
+                                    tok = next_token(ctx)
+                                }
+                            }
+                            लिखो_शब्द(out_file, ");\n")
+                            free(func_name)
+                        }
                     }
                 }
             }
+            tok = next_token(ctx)
         }
-        tok = next_token(ctx)
     }
 
     fclose(stream)
@@ -652,9 +657,15 @@
 # Pass 2: Parser & C Code Generator
 
 # Forward Declarations
+@extern
 कार्या parse_expr_string(ctx)
+
+@extern
 कार्या parse_statement(ctx, out_file, parsed_files, parsed_files_count_ptr)
+
+@extern
 कार्या parse_file(path, out_file, parsed_files, parsed_files_count_ptr)
+
 
 कार्या parse_primary_string(ctx) {
     मान tok = read_i64(ctx + 16)
@@ -1257,11 +1268,19 @@
         }
         
         यदि (is_str) {
-            लिखो_शब्द(out_file, "printf(\"%s\\n\", ")
+            लिखो_शब्द(out_file, "printf(")
+            fputc(34, out_file)
+            लिखो_शब्द(out_file, "%s\n")
+            fputc(34, out_file)
+            लिखो_शब्द(out_file, ", ")
             लिखो_शब्द(out_file, expr)
             लिखो_शब्द(out_file, ");\n")
         } अन्यथा {
-            लिखो_शब्द(out_file, "printf(\"%lld\\n\", ")
+            लिखो_शब्द(out_file, "printf(")
+            fputc(34, out_file)
+            लिखो_शब्द(out_file, "%lld\n")
+            fputc(34, out_file)
+            लिखो_शब्द(out_file, ", ")
             लिखो_शब्द(out_file, expr)
             लिखो_शब्द(out_file, ");\n")
         }
@@ -1384,8 +1403,14 @@
     next_char(ctx)
     next_token(ctx)
 
-    जबतक (read_i64(ctx + 16) != 0) {
-        parse_statement(ctx, out_file, parsed_files, parsed_files_count_ptr)
+    मान loop_parse = 1
+    जबतक (loop_parse) {
+        मान t = read_i64(ctx + 16)
+        यदि (t == 0) {
+            loop_parse = 0
+        } अन्यथा {
+            parse_statement(ctx, out_file, parsed_files, parsed_files_count_ptr)
+        }
     }
 
     fclose(stream)
@@ -1416,7 +1441,11 @@
     लिखो_शब्द(out_file, "void* vajra_gc_alloc(size_t size) { return malloc(size); }\n")
     लिखो_शब्द(out_file, "void vajra_gc_free(void* ptr) { free(ptr); }\n")
     लिखो_शब्द(out_file, "void vajra_throw_exception(const char* msg) {\n")
-    लिखो_शब्द(out_file, "    fprintf(stderr, \"क्रैश! अनपेक्षित अपवाद: %s\\n\", msg);\n")
+    लिखो_शब्द(out_file, "    fprintf(stderr, ")
+    fputc(34, out_file)
+    लिखो_शब्द(out_file, "क्रैश! अनपेक्षित अपवाद: %s\n")
+    fputc(34, out_file)
+    लिखो_शब्द(out_file, ", msg);\n")
     लिखो_शब्द(out_file, "    exit(1);\n")
     लिखो_शब्द(out_file, "}\n")
     लिखो_शब्द(out_file, "void __main(void) {\n")
