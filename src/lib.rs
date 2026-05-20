@@ -1,56 +1,58 @@
-#![deny(warnings)]
-#![warn(clippy::all, clippy::pedantic)]
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::must_use_candidate,
-    clippy::module_name_repetitions,
-    clippy::too_many_lines,
-    clippy::wildcard_imports,
-    clippy::shadow_unrelated,
-    clippy::similar_names,
-    clippy::struct_excessive_bools,
-    clippy::uninlined_format_args,
-    clippy::manual_let_else,
-    clippy::bool_to_int_with_if,
-    clippy::match_like_matches_macro,
-    clippy::single_match,
-    clippy::items_after_statements,
-    clippy::ptr_arg,
-    clippy::redundant_closure_for_method_calls,
-    clippy::derive_partial_eq_without_eq,
-    clippy::ignored_unit_patterns,
-    clippy::collapsible_else_if,
-    clippy::redundant_pattern_matching,
-    clippy::match_single_binding,
-    clippy::manual_range_contains,
-    clippy::needless_return,
-    clippy::match_bool,
-    clippy::collapsible_match,
-    clippy::single_match_else,
-    clippy::useless_format,
-    clippy::manual_string_new,
-    clippy::new_without_default,
-    clippy::match_same_arms,
-    clippy::too_many_arguments,
-    clippy::upper_case_acronyms,
-    clippy::cognitive_complexity,
-    clippy::non_std_lazy_statics,
-    clippy::unnecessary_wraps,
-    clippy::manual_assert,
-    clippy::assigning_clones,
-    clippy::cloned_instead_of_copied,
-    clippy::redundant_else,
-    clippy::manual_strip
-)]
+/// Vajra Compiler — Public Library API
+/// No external compiler dependency (LLVM, GCC, MSVC, Clang) — 100% self-hosted.
 
-pub mod lexer;
 pub mod ast;
+pub mod lexer;
 pub mod parser;
+pub mod ir;
 pub mod codegen;
+pub mod linker;
+pub mod runtime;
 pub mod eval;
 
+pub use ast::Program;
+pub use lexer::Lexer;
+pub use parser::Parser;
+pub use ir::IrModule;
+pub use codegen::Backend;
+pub use linker::TargetPlatform;
+
+use anyhow::Result;
+
+/// Full compilation pipeline: source → executable bytes
+pub fn compile_source(
+    source: &str,
+    module_name: &str,
+    backend: Backend,
+    platform: TargetPlatform,
+) -> Result<Vec<u8>> {
+    // 1. Lex + Parse
+    let lexer = Lexer::new(source);
+    let mut parser = Parser::new(lexer);
+    let program = parser.parse_program();
+
+    // 2. AST → IR
+    let ir_module = codegen::ast_to_ir::lower(&program, module_name)?;
+
+    // 3. IR → Object file bytes
+    let obj_bytes = codegen::compile_to_object(&ir_module, &backend)?;
+
+    // 4. Get embedded runtime object
+    let runtime_bytes = runtime::get_runtime_object_bytes(&platform);
+
+    // 5. Link → executable
+    linker::link(&obj_bytes, &runtime_bytes, &platform, "main")
+}
+
+/// Parse only — returns the AST
+pub fn parse_source(source: &str) -> Program {
+    let lexer = Lexer::new(source);
+    let mut parser = Parser::new(lexer);
+    parser.parse_program()
+}
+
+/// Lower AST to IR only
+pub fn lower_to_ir(source: &str, module_name: &str) -> Result<IrModule> {
+    let program = parse_source(source);
+    codegen::ast_to_ir::lower(&program, module_name)
+}

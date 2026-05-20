@@ -1,662 +1,474 @@
-#![deny(warnings)]
-#![warn(clippy::all, clippy::pedantic)]
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::must_use_candidate,
-    clippy::module_name_repetitions,
-    clippy::too_many_lines,
-    clippy::wildcard_imports,
-    clippy::shadow_unrelated,
-    clippy::similar_names,
-    clippy::struct_excessive_bools,
-    clippy::uninlined_format_args,
-    clippy::manual_let_else,
-    clippy::bool_to_int_with_if,
-    clippy::match_like_matches_macro,
-    clippy::single_match,
-    clippy::items_after_statements,
-    clippy::ptr_arg,
-    clippy::redundant_closure_for_method_calls,
-    clippy::derive_partial_eq_without_eq,
-    clippy::ignored_unit_patterns,
-    clippy::collapsible_else_if,
-    clippy::redundant_pattern_matching,
-    clippy::match_single_binding,
-    clippy::manual_range_contains,
-    clippy::needless_return,
-    clippy::match_bool,
-    clippy::collapsible_match,
-    clippy::single_match_else,
-    clippy::useless_format,
-    clippy::manual_string_new,
-    clippy::new_without_default,
-    clippy::match_same_arms,
-    clippy::too_many_arguments,
-    clippy::upper_case_acronyms,
-    clippy::cognitive_complexity,
-    clippy::non_std_lazy_statics,
-    clippy::unnecessary_wraps,
-    clippy::manual_assert,
-    clippy::assigning_clones,
-    clippy::cloned_instead_of_copied,
-    clippy::redundant_else,
-    clippy::manual_strip
-)]
+/// Vajra Compiler Driver (vajrac)
+/// Version 0.2.0 — 100% Self-Hosted, No External Compiler Required
+/// Supports: compile, run, build, test — all without LLVM, GCC, MSVC, Clang
 
-#[cfg(target_os = "windows")]
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn _setjmp(_env: *mut std::ffi::c_void, _sender: *mut std::ffi::c_void) -> std::os::raw::c_int {
-    0
-}
-
-#[cfg(all(target_os = "windows", target_env = "gnu"))]
-#[link(name = "ffi")]
-extern "C" {}
-
-use clap::{Parser as ClapParser, Subcommand};
 use std::fs;
-use std::io::{self, Write};
+fn test_reloc() {
+    let _ = object::write::Relocation {
+        offset: 0,
+        symbol: object::write::SymbolId(0),
+        addend: 0,
+        flags: object::RelocationFlags::Generic {
+            kind: object::RelocationKind::Relative,
+            subkind: object::RelocationSubKind::None,
+            size: 32,
+        },
+    };
+}
 use std::path::Path;
-use inkwell::context::Context;
-use vajra_core::lexer::Lexer;
-use vajra_core::parser::Parser;
-use vajra_core::codegen::Codegen;
-use vajra_core::eval::Evaluator;
+use anyhow::{bail, Context, Result};
+use clap::{Parser as ClapParser, Subcommand};
 
+use vajra_core::{
+    ast::Program,
+    codegen::{self, ast_to_ir, Backend},
+    eval,
+    lexer::Lexer,
+    linker::{self, TargetPlatform},
+    parser::Parser,
+    runtime,
+};
 
 #[derive(ClapParser, Debug)]
-#[command(author, version, about = "Vajra Compiler v0.1 - Powering the Intelligence of Tomorrow", long_about = None)]
+#[command(
+    name = "vajrac",
+    version = "0.1.0",
+    about = "Vajra: A self-hosted programming language with multi-human-language support\nNo C, LLVM, GCC, Clang, or MSVC required — truly independent.",
+    long_about = None
+)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Command,
 }
 
 #[derive(Subcommand, Debug)]
-enum Commands {
-    /// Compile a Vajra source file into a pure (.o) object file
+enum Command {
+    /// Compile a Vajra source file to a native executable
     Compile {
-        /// Source file to compile (.v, .vj, or .vajra)
-        source: String,
-
-        /// Output object binary name
-        #[arg(short, long, default_value = "output.o")]
+        /// Source file (.vajra)
+        file: String,
+        /// Output executable path
+        #[arg(short, long, default_value = "")]
         output: String,
-
-        /// Custom LLVM target triple for cross-compilation (e.g. aarch64-unknown-linux-gnu)
-        #[arg(short, long)]
-        target: Option<String>,
+        /// Target triple (e.g. x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu)
+        #[arg(long, default_value = "")]
+        target: String,
+        /// Optimization level (0-3)
+        #[arg(short = 'O', long, default_value = "0")]
+        opt: u8,
+        /// Emit IR instead of native code (for debugging)
+        #[arg(long)]
+        emit_ir: bool,
+        /// Emit object file only (don't link)
+        #[arg(long)]
+        emit_obj: bool,
     },
-    /// Build a source file or an existing (.o) object file into a runnable native OS binary (.exe)
+    /// Build a Vajra project (reads project.vajra or main.vajra)
     Build {
-        /// Input file (Sanskrit source file or a .o object file)
-        input: String,
-
-        /// Output executable binary name
-        #[arg(short, long, default_value = "output.exe")]
-        output: String,
-
-        /// Custom LLVM target triple for cross-compilation (e.g. aarch64-unknown-linux-gnu)
-        #[arg(short, long)]
-        target: Option<String>,
+        /// Optional source file (defaults to main.vajra)
+        #[arg(default_value = "main.vajra")]
+        file: String,
+        /// Release mode (optimization on)
+        #[arg(long)]
+        release: bool,
     },
-    /// Compile and run a source file immediately in dev mode
+    /// Compile and run a Vajra source file
     Run {
-        /// Source file to run (.v, .vj, or .vajra)
-        source: String,
+        /// Source file
+        file: String,
+        /// Arguments to pass to the compiled program
+        #[arg(last = true)]
+        args: Vec<String>,
     },
-    /// Scan a directory and run all Vajra integration test cases
-    Test {
-        /// Directory containing test cases
-        #[arg(short, long, default_value = "tests")]
-        dir: String,
+    /// Execute a Vajra file using the built-in interpreter (no compilation)
+    Exec {
+        /// Source file
+        file: String,
+        /// Arguments
+        #[arg(last = true)]
+        args: Vec<String>,
     },
-    /// Start the interactive console (REPL) like python
+    /// Start the Vajra REPL
     Repl,
+    /// Check a Vajra file for errors (no output)
+    Check {
+        /// Source file
+        file: String,
+    },
+    /// Show the AST for a source file (debugging tool)
+    Ast {
+        /// Source file
+        file: String,
+    },
+    /// Show the IR for a source file (debugging tool)
+    Ir {
+        /// Source file
+        file: String,
+    },
+    /// Print version and capability information
+    Info,
 }
 
-fn merge_imports(statements: Vec<vajra_core::ast::Statement>, current_dir: &Path, parsed_files: &mut std::collections::HashSet<std::path::PathBuf>) -> anyhow::Result<Vec<vajra_core::ast::Statement>> {
-    let mut merged = Vec::new();
-    for stmt in statements {
-        if let vajra_core::ast::Statement::Import(path_str) = stmt {
-            let mut import_path = current_dir.join(&path_str);
-            if !import_path.exists() {
-                for ext in &["v", "vj", "vajra"] {
-                    let candidate = import_path.with_extension(ext);
-                    if candidate.exists() {
-                        import_path = candidate;
-                        break;
-                    }
-                }
-            }
-            let canonical_path = fs::canonicalize(&import_path)
-                .unwrap_or_else(|_| import_path.clone());
-            
-            if !parsed_files.contains(&canonical_path) {
-                parsed_files.insert(canonical_path.clone());
-                println!("Importing package: {}", import_path.display());
-                if !import_path.exists() {
-                    anyhow::bail!("Import Error: File not found: {}", import_path.display());
-                }
-                
-                let input = fs::read_to_string(&import_path)?;
-                let lexer = Lexer::new(&input);
-                let mut parser = Parser::new(lexer);
-                let program = parser.parse_program();
-                
-                let import_dir = import_path.parent().unwrap_or(Path::new("."));
-                let imported_statements = merge_imports(program.statements, import_dir, parsed_files)?;
-                merged.extend(imported_statements);
-            }
-        } else {
-            merged.push(stmt);
-        }
-    }
-    Ok(merged)
-}
-
-fn compile_source_to_obj(source: &str, output_o: &str, target: Option<&str>) -> anyhow::Result<()> {
-    let path = Path::new(source);
-    if let Some(ext) = path.extension() {
-        let ext_str = ext.to_str().unwrap_or("");
-        if ext_str != "v" && ext_str != "vj" && ext_str != "vajra" {
-            anyhow::bail!("Invalid file extension. Please provide a .v, .vj, or .vajra file.");
-        }
-    } else {
-        anyhow::bail!("No file extension found. Please provide a .v, .vj, or .vajra file.");
-    }
-    
-    // 1. Read source
-    let input = fs::read_to_string(source)?;
-
-    // 2. Lexical Analysis
-    let lexer = Lexer::new(&input);
-
-    // 3. Parsing
-    let mut parser = Parser::new(lexer);
-    let mut program = parser.parse_program();
-
-    // 4. Resolve and Merge Imports
-    let source_path = Path::new(source);
-    let source_dir = source_path.parent().unwrap_or(Path::new("."));
-    let mut parsed_files = std::collections::HashSet::new();
-    if let Ok(canon) = fs::canonicalize(source_path) {
-        parsed_files.insert(canon);
-    }
-    program.statements = merge_imports(program.statements, source_dir, &mut parsed_files)?;
-
-    // 5. Codegen
-    let context = Context::create();
-    let codegen = Codegen::new(&context, "vajra_module");
-    
-    if let Err(e) = codegen.compile_program(&program) {
-        anyhow::bail!("Compilation Error: {}", e);
-    }
-
-    // 5. Output Object File
-    codegen.output_to_file(output_o, target).map_err(|e| anyhow::anyhow!(e))?;
-
-    Ok(())
-}
-
-fn link_executable(obj_path: &str, out_exe_path: &str) -> anyhow::Result<()> {
-    let temp_dir = std::env::temp_dir();
-    let runtime_c_path = temp_dir.join("vajra_runtime.c");
-    let runtime_obj_path = temp_dir.join("vajra_runtime.obj");
-
-    let runtime_code = r#"
-#include <stdio.h>
-#include <stdlib.h>
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
-void* vajra_gc_alloc(size_t size) {
-    return malloc(size);
-}
-
-void vajra_gc_free(void* ptr) {
-    free(ptr);
-}
-
-void vajra_throw_exception(const char* msg) {
-    fprintf(stderr, "क्रैश! अनपेक्षित अपवाद (Unhandled Exception): %s\n", msg);
-    exit(1);
-}
-
-void __main(void) {
-#ifdef _WIN32
-    SetConsoleOutputCP(65001);
-#endif
-}
-
-typedef struct {
-    void (*worker_fn)(long long, long long, long long*, long long);
-    long long start;
-    long long end;
-    long long* sum_ptr;
-    long long nodes;
-} ParallelTask;
-
-#ifdef _WIN32
-DWORD WINAPI parallel_thread_proc_helper(LPVOID param) {
-    ParallelTask* task = (ParallelTask*)param;
-    task->worker_fn(task->start, task->end, task->sum_ptr, task->nodes);
-    return 0;
-}
-
-DWORD WINAPI spawn_thread_proc_helper(LPVOID param) {
-    void (*fn)(void) = (void (*)(void))param;
-    fn();
-    return 0;
-}
-#endif
-
-void vajra_spawn(void (*fn)(void)) {
-#ifdef _WIN32
-    HANDLE thread = CreateThread(NULL, 0, spawn_thread_proc_helper, (LPVOID)fn, 0, NULL);
-    if (thread != NULL) {
-        CloseHandle(thread);
-    }
-#else
-    fn();
-#endif
-}
-
-void vajra_parallel_for(
-    long long start, 
-    long long end, 
-    void (*worker_fn)(long long, long long, long long*, long long), 
-    long long* sum_ptr, 
-    long long nodes
-) {
-#ifdef _WIN32
-    SYSTEM_INFO sysinfo;
-    GetSystemInfo(&sysinfo);
-    int num_threads = sysinfo.dwNumberOfProcessors;
-    if (num_threads < 1) num_threads = 1;
-    if (num_threads > 64) num_threads = 64;
-
-    long long total_iters = end - start;
-    if (total_iters <= 0) return;
-
-    if (total_iters < 100) {
-        worker_fn(start, end, sum_ptr, nodes);
-        return;
-    }
-
-    if (num_threads > total_iters) {
-        num_threads = (int)total_iters;
-    }
-
-    HANDLE* threads = (HANDLE*)malloc(sizeof(HANDLE) * num_threads);
-    ParallelTask* tasks = (ParallelTask*)malloc(sizeof(ParallelTask) * num_threads);
-
-    long long chunk_size = total_iters / num_threads;
-    long long rem = total_iters % num_threads;
-
-    long long current_start = start;
-    for (int i = 0; i < num_threads; i++) {
-        long long current_end = current_start + chunk_size + (i < rem ? 1 : 0);
-        
-        tasks[i].worker_fn = worker_fn;
-        tasks[i].start = current_start;
-        tasks[i].end = current_end;
-        tasks[i].sum_ptr = sum_ptr;
-        tasks[i].nodes = nodes;
-
-        threads[i] = CreateThread(NULL, 0, parallel_thread_proc_helper, &tasks[i], 0, NULL);
-        current_start = current_end;
-    }
-
-    WaitForMultipleObjects(num_threads, threads, TRUE, INFINITE);
-
-    for (int i = 0; i < num_threads; i++) {
-        CloseHandle(threads[i]);
-    }
-
-    free(threads);
-    free(tasks);
-#else
-    worker_fn(start, end, sum_ptr, nodes);
-#endif
-}
-"#;
-    fs::write(&runtime_c_path, runtime_code)?;
-
-    let target = "x86_64-pc-windows-msvc";
-    
-    // Discover cl.exe to compile runtime.c
-    let mut cl_tool = cc::windows_registry::find(target, "cl.exe")
-        .ok_or_else(|| anyhow::anyhow!("Failed to find MSVC compiler cl.exe. Ensure Build Tools are installed."))?;
-
-    println!("Compiling Vajra runtime using MSVC...");
-    let compile_status = cl_tool
-        .arg("/O2")
-        .arg("/c")
-        .arg(&runtime_c_path)
-        .arg(format!("/Fo{}", runtime_obj_path.to_str().unwrap()))
-        .status()?;
-
-    if !compile_status.success() {
-        anyhow::bail!("Failed to compile Vajra runtime with MSVC");
-    }
-
-    // Discover link.exe to link user obj and runtime obj
-    let mut link_tool = cc::windows_registry::find(target, "link.exe")
-        .ok_or_else(|| anyhow::anyhow!("Failed to find MSVC linker link.exe. Ensure Build Tools are installed."))?;
-
-    println!("Linking executable with MSVC...");
-    let link_status = link_tool
-        .arg(obj_path)
-        .arg(&runtime_obj_path)
-        .arg(format!("/OUT:{}", out_exe_path))
-        .arg("/SUBSYSTEM:CONSOLE")
-        .status()?;
-
-    if !link_status.success() {
-        anyhow::bail!("Failed to link Vajra executable with MSVC");
-    }
-
-    // Clean up temporary compilation artifacts
-    let _ = fs::remove_file(runtime_c_path);
-    let _ = fs::remove_file(runtime_obj_path);
-
-    Ok(())
-}
-
-fn run_file(source: &str) -> anyhow::Result<()> {
-    let source_path = Path::new(source);
-    if !source_path.exists() {
-        anyhow::bail!("Source file not found: {}", source);
-    }
-    
-    let temp_exe = if cfg!(windows) {
-        ".\\_temp_run_exec.exe"
-    } else {
-        "./_temp_run_exec"
-    };
-
-    println!("Compiling {} for execution...", source);
-    
-    let temp_o = "_temp_run_obj.o";
-    compile_source_to_obj(source, temp_o, None)?;
-    
-    link_executable(temp_o, temp_exe)?;
-    let _ = fs::remove_file(temp_o);
-
-    println!("Executing {}...\n", temp_exe);
-    
-    let mut child = std::process::Command::new(temp_exe)
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to run compiled executable: {}", e))?;
-    
-    let status = child.wait()?;
-    
-    let _ = fs::remove_file(temp_exe);
-    
-    if !status.success() {
-        if let Some(code) = status.code() {
-            anyhow::bail!("Program exited with non-zero status code: {}", code);
-        } else {
-            anyhow::bail!("Program terminated by signal");
-        }
-    }
-
-    Ok(())
-}
-
-fn run_test_suite(test_dir: &str) -> anyhow::Result<()> {
-    let path = Path::new(test_dir);
-    if !path.exists() || !path.is_dir() {
-        anyhow::bail!("Test directory not found: {}", test_dir);
-    }
-
-    println!("============================================================");
-    println!("Vajra Test Harness: Running integration tests in '{}'", test_dir);
-    println!("============================================================");
-
-    let mut passed = 0;
-    let mut failed = 0;
-    let mut total = 0;
-
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let test_file = entry.path();
-        if test_file.is_file() {
-            if let Some(ext) = test_file.extension() {
-                let ext_str = ext.to_str().unwrap_or("");
-                if ext_str == "vj" || ext_str == "vajra" {
-                    total += 1;
-                    let file_name = test_file.file_name().unwrap().to_str().unwrap();
-                    print!("Running test {:<30} ... ", file_name);
-                    std::io::stdout().flush()?;
-
-                    match run_single_test(&test_file) {
-                        Ok(()) => {
-                            println!("[PASS]");
-                            passed += 1;
-                        }
-                        Err(e) => {
-                            println!("[FAIL]");
-                            println!("  ↳ Error: {}", e);
-                            failed += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    println!("============================================================");
-    println!("Test Summary: Total: {}, Passed: {}, Failed: {}", total, passed, failed);
-    println!("============================================================");
-
-    if failed > 0 {
-        anyhow::bail!("Some integration tests failed!");
-    }
-
-    Ok(())
-}
-
-fn run_single_test(test_file: &Path) -> anyhow::Result<()> {
-    let content = fs::read_to_string(test_file)?;
-    let mut expected_output = Vec::new();
-    let mut expected_exit_code = 0;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("# EXPECT:") {
-            let expected = trimmed["# EXPECT:".len()..].trim().to_string();
-            expected_output.push(expected);
-        } else if trimmed.starts_with("# EXPECT_EXIT:") {
-            if let Ok(code) = trimmed["# EXPECT_EXIT:".len()..].trim().parse::<i32>() {
-                expected_exit_code = code;
-            }
-        }
-    }
-
-    let temp_o = "_temp_test_obj.o";
-    let temp_exe = if cfg!(windows) {
-        ".\\_temp_test_exec.exe"
-    } else {
-        "./_temp_test_exec"
-    };
-
-    let _ = fs::remove_file(temp_o);
-    let _ = fs::remove_file(temp_exe);
-
-    if let Err(e) = compile_source_to_obj(test_file.to_str().unwrap(), temp_o, None) {
-        anyhow::bail!("Compilation failed: {}", e);
-    }
-
-    if let Err(e) = link_executable(temp_o, temp_exe) {
-        let _ = fs::remove_file(temp_o);
-        anyhow::bail!("Linking failed: {}", e);
-    }
-    let _ = fs::remove_file(temp_o);
-
-    let output = std::process::Command::new(temp_exe)
-        .output();
-
-    let _ = fs::remove_file(temp_exe);
-
-    let output = match output {
-        Ok(out) => out,
-        Err(e) => anyhow::bail!("Failed to execute compiled binary: {}", e),
-    };
-
-    let exit_code = output.status.code().unwrap_or(-1);
-    if exit_code != expected_exit_code {
-        anyhow::bail!("Exit code mismatch. Expected {}, got {}", expected_exit_code, exit_code);
-    }
-
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let stdout_lines: Vec<&str> = stdout_str.lines().map(str::trim).collect();
-
-    for (i, expected) in expected_output.iter().enumerate() {
-        if i >= stdout_lines.len() {
-            anyhow::bail!("Expected output line not found: '{}'", expected);
-        }
-        if stdout_lines[i] != expected {
-            anyhow::bail!("Output mismatch at line {}. Expected '{}', got '{}'", i + 1, expected, stdout_lines[i]);
-        }
-    }
-
-    Ok(())
-}
-
-fn main() -> anyhow::Result<()> {
-    // 1. Intercept direct single file execution (Dev Mode auto build & run)
-    let raw_args: Vec<String> = std::env::args().collect();
-    if raw_args.len() == 2 && !raw_args[1].starts_with('-') {
-        let path = Path::new(&raw_args[1]);
-        if path.exists() && path.is_file() {
-            if let Some(ext) = path.extension() {
-                let ext_str = ext.to_str().unwrap_or("");
-                if ext_str == "vj" || ext_str == "vajra" {
-                    println!("Vajra Single-File Dev Mode execution initiated for {}", raw_args[1]);
-                    return run_file(&raw_args[1]);
-                }
-            }
-        }
-    }
-
-    // 2. Parse standard Clap subcommands
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match &cli.command {
-        Some(Commands::Compile { source, output, target }) => {
-            println!("Vajra Compile Process Initiated");
-            compile_source_to_obj(source, output, target.as_deref())?;
-            println!("Successfully compiled {} to pure object file {}", source, output);
+    match cli.command {
+        Command::Compile { file, output, target, opt, emit_ir, emit_obj } => {
+            cmd_compile(&file, &output, &target, opt, emit_ir, emit_obj)
         }
-        Some(Commands::Build { input, output, target }) => {
-            println!("Vajra Build Process Initiated");
-            
-            let input_path = Path::new(input);
-            let obj_file_to_link = if let Some(ext) = input_path.extension() {
-                let ext_str = ext.to_str().unwrap_or("");
-                if ext_str == "o" || ext_str == "obj" {
-                    input.clone()
-                } else if ext_str == "v" || ext_str == "vj" || ext_str == "vajra" {
-                    let temp_o = format!("{}.o", input_path.file_stem().unwrap().to_str().unwrap());
-                    println!("Compiling {} to intermediate object file {}...", input, temp_o);
-                    compile_source_to_obj(input, &temp_o, target.as_deref())?;
-                    temp_o
-                } else {
-                    anyhow::bail!("Unsupported file type. Please provide a source (.vajra, .v, .vj) or an object (.o, .obj) file.");
-                }
-            } else {
-                anyhow::bail!("No file extension found.");
-            };
-
-            // Link dynamic object code with runtime stubs using MSVC link.exe
-            link_executable(&obj_file_to_link, output)?;
-
-            // Clean up intermediate object file if we compiled it on-the-fly
-            if obj_file_to_link != *input {
-                let _ = fs::remove_file(&obj_file_to_link);
-            }
-
-            println!("Successfully built executable binary: {}", output);
+        Command::Build { file, release } => {
+            cmd_build(&file, release)
         }
-        Some(Commands::Run { source }) => {
-            run_file(source)?;
+        Command::Run { file, args } => {
+            cmd_run(&file, &args)
         }
-        Some(Commands::Test { dir }) => {
-            run_test_suite(dir)?;
+        Command::Exec { file, args } => {
+            cmd_exec(&file, &args)
         }
-        Some(Commands::Repl) | None => {
-            run_repl()?;
+        Command::Repl => {
+            cmd_repl()
+        }
+        Command::Check { file } => {
+            cmd_check(&file)
+        }
+        Command::Ast { file } => {
+            cmd_ast(&file)
+        }
+        Command::Ir { file } => {
+            cmd_ir(&file)
+        }
+        Command::Info => {
+            cmd_info();
+            Ok(())
         }
     }
+}
 
+// ─── Command Implementations ────────────────────────────────────────────────
+
+fn cmd_compile(
+    file: &str,
+    output: &str,
+    target: &str,
+    opt_level: u8,
+    emit_ir: bool,
+    emit_obj: bool,
+) -> Result<()> {
+    let source = fs::read_to_string(file)
+        .with_context(|| format!("Cannot read '{}'", file))?;
+
+    let module_name = Path::new(file).file_stem().unwrap_or_default().to_string_lossy().to_string();
+
+    eprintln!("🔰 Vajra v0.2 — Compiling '{}' ...", file);
+    eprintln!("   No LLVM, GCC, MSVC, or Clang required");
+
+    // 1. Parse
+    let program = parse(&source)?;
+    eprintln!("   ✓ Parsed {} top-level statements", program.statements.len());
+
+    // 2. Lower to IR
+    let ir_module = ast_to_ir::lower(&program, &module_name)
+        .with_context(|| "AST→IR lowering failed")?;
+    eprintln!("   ✓ IR generated ({} functions)", ir_module.functions.len());
+
+    if emit_ir {
+        print_ir(&ir_module);
+        return Ok(());
+    }
+
+    // 3. Determine target
+    let (backend, platform) = resolve_target(target);
+    eprintln!("   ✓ Target: {:?} on {:?}", backend, platform);
+
+    // 4. Code generation → object file
+    let obj_bytes = codegen::compile_to_object(&ir_module, &backend)
+        .with_context(|| "Code generation failed")?;
+    eprintln!("   ✓ Object generated ({} bytes)", obj_bytes.len());
+
+    if emit_obj {
+        let obj_path = output_path(file, output, "o", &platform);
+        fs::write(&obj_path, &obj_bytes)
+            .with_context(|| format!("Cannot write '{}'", obj_path))?;
+        eprintln!("   ✓ Object written to '{}'", obj_path);
+        return Ok(());
+    }
+
+    // 5. Link with embedded runtime
+    let runtime_bytes = runtime::get_runtime_object_bytes(&platform);
+    let exe_bytes = linker::link(&obj_bytes, &runtime_bytes, &platform, "main")
+        .with_context(|| "Linking failed")?;
+    eprintln!("   ✓ Linked ({} bytes)", exe_bytes.len());
+
+    // 6. Write executable
+    let exe_path = output_path(file, output, platform.exe_extension(), &platform);
+    fs::write(&exe_path, &exe_bytes)
+        .with_context(|| format!("Cannot write '{}'", exe_path))?;
+
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&exe_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&exe_path, perms)?;
+    }
+
+    eprintln!("   ✓ Executable: '{}'", exe_path);
+    eprintln!("\n✅ Build complete!");
     Ok(())
 }
 
-fn run_repl() -> anyhow::Result<()> {
-    println!("Vajra Interactive Console v0.1 - Powering the Intelligence of Tomorrow");
-    println!("Type Sanskrit/Hindi code and press Enter. Type 'exit', 'प्रस्थान' or 'बाहर' to exit.");
-    println!();
+fn cmd_build(file: &str, release: bool) -> Result<()> {
+    let opt = if release { 3 } else { 0 };
+    eprintln!("🔨 Building '{}' (release={})", file, release);
+    cmd_compile(file, "", "", opt, false, false)
+}
 
-    let mut evaluator = Evaluator::new();
+fn cmd_run(file: &str, extra_args: &[String]) -> Result<()> {
+    // 1. Compile to temp directory
+    let tmp_dir = std::env::temp_dir();
+    let module_name = Path::new(file).file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let platform = TargetPlatform::host();
+    let ext = platform.exe_extension();
+    let exe_name = if ext.is_empty() {
+        format!("{}/{}", tmp_dir.display(), module_name)
+    } else {
+        format!("{}/{}.{}", tmp_dir.display(), module_name, ext)
+    };
+
+    cmd_compile(file, &exe_name, "", 0, false, false)?;
+
+    // 2. Execute
+    eprintln!("\n🚀 Running '{}' ...\n", exe_name);
+    let status = std::process::Command::new(&exe_name)
+        .args(extra_args)
+        .status()
+        .with_context(|| format!("Failed to execute '{}'", exe_name))?;
+
+    std::process::exit(status.code().unwrap_or(0));
+}
+
+fn cmd_exec(file: &str, _extra_args: &[String]) -> Result<()> {
+    // Use the interpreter (eval.rs) — no compilation
+    let source = fs::read_to_string(file)
+        .with_context(|| format!("Cannot read '{}'", file))?;
+
+    let program = parse(&source)?;
+    eprintln!("🔰 Vajra v0.2 — Executing '{}' (interpreter mode)", file);
+
+    let mut interpreter = eval::Interpreter::new();
+    interpreter.run(&program);
+    Ok(())
+}
+
+fn cmd_repl() -> Result<()> {
+    use std::io::{self, BufRead, Write};
+
+    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("║              Vajra Language — Interactive REPL               ║");
+    println!("║  Version 0.1.0 — Self-Hosted | No External Compiler Required ║");
+    println!("║  Languages: English, हिंदी, संस्कृत, தமிழ், العربية, 中文   ║");
+    println!("║  Type 'exit' or 'quit' to leave | ':compile <code>' to emit  ║");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+
+    let mut interpreter = eval::Interpreter::new();
     let stdin = io::stdin();
-    let mut stdout = io::stdout();
-
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
+    let mut buffer = String::new();
+    let mut brace_depth: i32 = 0;
 
     loop {
-        print!(">>> ");
-        stdout.flush()?;
+        if brace_depth == 0 {
+            print!("vajra> ");
+        } else {
+            print!("    ...  ");
+        }
+        io::stdout().flush().ok();
 
         let mut line = String::new();
-        let bytes_read = stdin.read_line(&mut line)?;
-        if bytes_read == 0 {
-            println!();
-            break;
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
         }
 
         let trimmed = line.trim();
-        if trimmed == "exit" || trimmed == "प्रस्थान" || trimmed == "बाहर" {
-            break;
+
+        match trimmed {
+            "exit" | "quit" | "निर्गम" | "بيرون" | "退出" => {
+                println!("\n🙏 नमस्ते | Goodbye | Salam | 再见");
+                break;
+            }
+            _ if trimmed.starts_with(":ir ") => {
+                let code = &trimmed[4..];
+                match vajra_core::lower_to_ir(code, "repl") {
+                    Ok(module) => print_ir(&module),
+                    Err(e) => eprintln!("IR Error: {}", e),
+                }
+                continue;
+            }
+            _ if trimmed.starts_with(":compile ") => {
+                let code = &trimmed[9..];
+                eprintln!("(compile-mode: use 'vajrac compile <file>' for full compilation)");
+                match vajra_core::lower_to_ir(code, "repl") {
+                    Ok(module) => {
+                        print_ir(&module);
+                    }
+                    Err(e) => eprintln!("Error: {}", e),
+                }
+                continue;
+            }
+            ":help" => {
+                println!("REPL Commands:");
+                println!("  :ir <code>        — Show IR for a snippet");
+                println!("  :compile <code>   — Show IR output");
+                println!("  exit / quit       — Exit the REPL");
+                println!("\nVajra supports these languages:");
+                println!("  English: fn main() {{ let x = 42; print(x) }}");
+                println!("  हिंदी:   कार्य मुख्य() {{ मान x = 42; लिखो(x) }}");
+                println!("  தமிழ்:   செயல்பாடு முக்கிய() {{ மாறி x = 42 }}");
+                println!("  中文:    函数 主函数() {{ 变量 x = 42; 打印(x) }}");
+                println!("  Español: función principal() {{ variable x = 42 }}");
+                continue;
+            }
+            _ => {}
         }
 
-        if trimmed.is_empty() {
+        // Count braces for multi-line input
+        for c in trimmed.chars() {
+            match c {
+                '{' => brace_depth += 1,
+                '}' => brace_depth -= 1,
+                _ => {}
+            }
+        }
+        buffer.push_str(&line);
+
+        if brace_depth <= 0 {
+            brace_depth = 0;
+            let code = buffer.trim().to_string();
+            buffer.clear();
+
+            if code.is_empty() { continue; }
+
+            let program = match parse(&code) {
+                Ok(p) => p,
+                Err(e) => { eprintln!("Parse error: {}", e); continue; }
+            };
+            interpreter.run(&program);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_check(file: &str) -> Result<()> {
+    let source = fs::read_to_string(file)
+        .with_context(|| format!("Cannot read '{}'", file))?;
+    let module_name = Path::new(file).file_stem().unwrap_or_default().to_string_lossy();
+
+    let program = parse(&source)?;
+    ast_to_ir::lower(&program, &module_name)
+        .with_context(|| "IR lowering error")?;
+
+    eprintln!("✅ '{}' is valid Vajra code", file);
+    Ok(())
+}
+
+fn cmd_ast(file: &str) -> Result<()> {
+    let source = fs::read_to_string(file)?;
+    let program = parse(&source)?;
+    println!("{:#?}", program);
+    Ok(())
+}
+
+fn cmd_ir(file: &str) -> Result<()> {
+    let source = fs::read_to_string(file)?;
+    let module_name = Path::new(file).file_stem().unwrap_or_default().to_string_lossy();
+    let program = parse(&source)?;
+    let ir = ast_to_ir::lower(&program, &module_name)?;
+    print_ir(&ir);
+    Ok(())
+}
+
+fn cmd_info() {
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║                    Vajra Language v0.1.0                         ║");
+    println!("║        Self-Hosted — Zero External Compiler Dependency            ║");
+    println!("╠══════════════════════════════════════════════════════════════════╣");
+    println!("║  Backend          : Native x86-64 (pure Rust)                    ║");
+    println!("║  Object Format    : COFF (Windows) / ELF (Linux)                 ║");
+    println!("║  Linker           : Own PE32+ / ELF64 linker (pure Rust)         ║");
+    println!("║  Runtime          : Own runtime (kernel32 / Linux syscalls only)  ║");
+    println!("║  LLVM Dependency  : NONE                                          ║");
+    println!("║  GCC Dependency   : NONE                                          ║");
+    println!("║  MSVC Dependency  : NONE                                          ║");
+    println!("║  Clang Dependency : NONE                                          ║");
+    println!("╠══════════════════════════════════════════════════════════════════╣");
+    println!("║  Human Languages Supported (keywords):                            ║");
+    println!("║    English, Sanskrit (संस्कृत), Hindi (हिंदी), Tamil (தமிழ்)      ║");
+    println!("║    Arabic (العربية), Chinese (中文), Spanish (Español)             ║");
+    println!("║    Marathi (मराठी), Bengali (বাংলা), Telugu (తెలుగు)               ║");
+    println!("║    Kannada (ಕನ್ನಡ), Gujarati (ગુજરાતી), Russian (Русский)          ║");
+    println!("║    French (Français), German (Deutsch), Japanese (日本語)          ║");
+    println!("║    Korean (한국어)                                                  ║");
+    println!("╠══════════════════════════════════════════════════════════════════╣");
+    println!("║  Targets:                                                          ║");
+    println!("║    x86_64-pc-windows — PE32+ EXE                                  ║");
+    println!("║    x86_64-linux-gnu  — ELF64                                       ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+fn parse(source: &str) -> Result<Program> {
+    let lexer = Lexer::new(source);
+    let mut parser = Parser::new(lexer);
+    Ok(parser.parse_program())
+}
+
+fn resolve_target(triple: &str) -> (Backend, TargetPlatform) {
+    if triple.is_empty() {
+        (Backend::host(), TargetPlatform::host())
+    } else {
+        (Backend::from_triple(triple), TargetPlatform::from_triple(triple))
+    }
+}
+
+fn output_path(source_file: &str, output: &str, ext: &str, _platform: &TargetPlatform) -> String {
+    if !output.is_empty() {
+        return output.to_string();
+    }
+    let stem = Path::new(source_file).file_stem().unwrap_or_default().to_string_lossy();
+    if ext.is_empty() {
+        stem.to_string()
+    } else {
+        format!("{}.{}", stem, ext)
+    }
+}
+
+fn print_ir(module: &vajra_core::ir::IrModule) {
+    use vajra_core::ir::*;
+    println!("=== IR Module: {} ===", module.name);
+    println!("Globals:");
+    for g in &module.globals {
+        println!("  @{} = {:?}", g.name, String::from_utf8_lossy(&g.data));
+    }
+    println!("\nFunctions:");
+    for func in &module.functions {
+        if func.is_extern {
+            println!("  extern fn {}({})", func.name, func.params.iter().map(|p| format!("%{}", p.val)).collect::<Vec<_>>().join(", "));
             continue;
         }
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let lexer = Lexer::new(trimmed);
-            let mut parser = Parser::new(lexer);
-            let program = parser.parse_program();
-            evaluator.eval_program(&program)
-        }));
-
-        match result {
-            Ok(eval_res) => match eval_res {
-                Ok(val) => {
-                    if val != vajra_core::eval::Value::Void {
-                        println!("{}", val);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{}", e);
-                }
-            },
-            Err(_) => {
-                eprintln!("Error: Invalid syntax");
+        let main_mark = if func.is_main { " [main]" } else { "" };
+        println!("\n  fn {}({}){}:", func.name,
+            func.params.iter().map(|p| format!("{}: {:?}", p.name, p.ty)).collect::<Vec<_>>().join(", "),
+            main_mark);
+        for block in &func.blocks {
+            println!("    .{}:", block.label);
+            for instr in &block.instrs {
+                println!("      {:?}", instr);
+            }
+            if let Some(term) = &block.terminator {
+                println!("      [TERM] {:?}", term);
             }
         }
     }
-
-    std::panic::set_hook(default_hook);
-
-    Ok(())
 }

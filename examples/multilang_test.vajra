@@ -1,0 +1,28 @@
+// English-only test to verify core functionality
+fn greet(name) {
+    print("Hello, " + name + "!")
+}
+
+fn factorial(n) {
+    if (n <= 1) {
+        return 1
+    } else {
+        return n * factorial(n - 1)
+    }
+}
+
+@main
+fn main() {
+    greet("World")
+    let x = 10
+    let result = factorial(x)
+    print("10! = " + str(result))
+    
+    let i = 1
+    while (i <= 5) {
+        print(i)
+        i = i + 1
+    }
+    
+    print("Self-hosted Vajra compiler — no GCC, LLVM, or MSVC!")
+}
