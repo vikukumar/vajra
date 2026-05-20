@@ -146,10 +146,16 @@ fn build_import_table_bytes(
 }
 
 fn build_dos_stub() -> Vec<u8> {
-    let mut stub = vec![0u8; 0x40];
-    stub[0] = b'M';
-    stub[1] = b'Z';
-    stub[0x3C] = 0x40;
+    let mut stub = vec![
+        0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00,
+        0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00,
+        0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
+    ];
     stub
 }
 
@@ -256,7 +262,8 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
     }
     data_len = data_merged.len();
 
-    let image_size = align_up(data_rva + data_len as u32, SECTION_ALIGN);
+    let data_vsize = if data_len == 0 { SECTION_ALIGN } else { data_len as u32 };
+    let image_size = align_up(data_rva + data_vsize, SECTION_ALIGN);
 
     // ── Build Symbol VA Map ──────────────────────────────────────────────────
     let mut symbol_vas = HashMap::new();
@@ -411,7 +418,7 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
         dos_stub.len() as u32
             + 4   // PE sig
             + 20  // COFF header
-            + 112 // Optional header (PE32+)
+            + 240 // Optional header (PE32+)
             + num_sections as u32 * 40, // section headers
         FILE_ALIGN,
     );
@@ -433,7 +440,7 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
     write_u32(&mut pe_hdr, 0); // Timestamp
     write_u32(&mut pe_hdr, 0); // Symbol table ptr
     write_u32(&mut pe_hdr, 0); // Symbol table count
-    write_u16(&mut pe_hdr, 112); // Optional header size
+    write_u16(&mut pe_hdr, 240); // Optional header size
     write_u16(&mut pe_hdr, 0x0022); // exe, large-address-aware
 
     // Optional Header PE32+
@@ -459,7 +466,7 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
     write_u32(&mut pe_hdr, headers_size);
     write_u32(&mut pe_hdr, 0);
     write_u16(&mut pe_hdr, 3); // Subsystem: WINDOWS_CUI
-    write_u16(&mut pe_hdr, 0x0140); // DLLCharacteristics: NX-compat, dynamic-base
+    write_u16(&mut pe_hdr, 0x8100); // DLLCharacteristics: NX-compat, Terminal Server Aware (ASLR disabled)
     write_u64(&mut pe_hdr, 0x0010_0000); // StackReserve
     write_u64(&mut pe_hdr, 0x0001_0000); // StackCommit
     write_u64(&mut pe_hdr, 0x0010_0000); // HeapReserve
@@ -494,7 +501,7 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
 
     write_section(b".text\0\0\0", text_merged.len() as u32, text_rva, text_raw_size, text_file_offset, 0x6000_0020);
     write_section(b".rdata\0\0", rdata_merged.len() as u32, rdata_rva, rdata_raw_size, rdata_file_offset, 0x4000_0040);
-    write_section(b".data\0\0\0", data_merged.len() as u32, data_rva, data_raw_size, data_file_offset, 0xC000_0040);
+    write_section(b".data\0\0\0", data_vsize, data_rva, data_raw_size, data_file_offset, 0xC000_0040);
 
     let mut out = Vec::new();
     out.extend_from_slice(&dos_stub);

@@ -329,14 +329,8 @@ impl<'m> X86_64Codegen<'m> {
             }
         }
 
-        // Main init call
-        if func.is_main {
-            // call vajra_runtime_init
-            fg.code.push(0xE8);
-            let patch = fg.pos();
-            fg.code.extend_from_slice(&[0; 4]);
-            fg.relocs.push(PendingReloc { offset: patch as u64, symbol: "vajra_runtime_init".into(), addend: -4 });
-        }
+        // vajra_runtime_init is called via the IR (ast_to_ir inserts it as a Call instruction)
+        // Do NOT emit it here — it would duplicate the call and corrupt the call sequence.
 
         // Compile blocks
         for block in &func.blocks {
@@ -369,8 +363,15 @@ impl<'m> X86_64Codegen<'m> {
             fg.code[*patch..*patch+4].copy_from_slice(&rel.to_le_bytes());
         }
 
-        // Patch frame size
-        let frame = align16((-fg.stack_offset).max(32) as u32);
+        // Patch frame size — must be aligned so RSP is 16-byte aligned at CALL sites.
+        // After `push rbp` (-8 bytes) + `sub rsp, frame`, the stack offset from original is -(8 + frame).
+        // At each CALL, RSP must be 16-aligned (CALL pushes 8 more bytes making it the expected 16n).
+        // So we need (8 + frame) % 16 == 0, i.e., frame ≡ 8 (mod 16).
+        let raw = (-fg.stack_offset).max(32) as u32;
+        let base = align16(raw); // round up to multiple of 16
+        // If base % 16 == 0 → frame = base + 8 to satisfy (8+frame) % 16 == 0
+        // If base % 16 == 8 → frame = base (already satisfies)
+        let frame = if base % 16 == 8 { base } else { base + 8 };
         fg.code[frame_patch+3..frame_patch+7].copy_from_slice(&frame.to_le_bytes());
 
         Ok(fg)

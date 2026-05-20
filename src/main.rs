@@ -1,20 +1,9 @@
 /// Vajra Compiler Driver (vajrac)
-/// Version 0.2.0 — 100% Self-Hosted, No External Compiler Required
+/// Version 0.1.0 — 100% Self-Hosted, No External Compiler Required
 /// Supports: compile, run, build, test — all without LLVM, GCC, MSVC, Clang
 
 use std::fs;
-fn test_reloc() {
-    let _ = object::write::Relocation {
-        offset: 0,
-        symbol: object::write::SymbolId(0),
-        addend: 0,
-        flags: object::RelocationFlags::Generic {
-            kind: object::RelocationKind::Relative,
-            subkind: object::RelocationSubKind::None,
-            size: 32,
-        },
-    };
-}
+
 use std::path::Path;
 use anyhow::{bail, Context, Result};
 use clap::{Parser as ClapParser, Subcommand};
@@ -38,7 +27,7 @@ use vajra_core::{
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -113,33 +102,36 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Compile { file, output, target, opt, emit_ir, emit_obj } => {
+        Some(Command::Compile { file, output, target, opt, emit_ir, emit_obj }) => {
             cmd_compile(&file, &output, &target, opt, emit_ir, emit_obj)
         }
-        Command::Build { file, release } => {
+        Some(Command::Build { file, release }) => {
             cmd_build(&file, release)
         }
-        Command::Run { file, args } => {
+        Some(Command::Run { file, args }) => {
             cmd_run(&file, &args)
         }
-        Command::Exec { file, args } => {
+        Some(Command::Exec { file, args }) => {
             cmd_exec(&file, &args)
         }
-        Command::Repl => {
+        Some(Command::Repl) => {
             cmd_repl()
         }
-        Command::Check { file } => {
+        Some(Command::Check { file }) => {
             cmd_check(&file)
         }
-        Command::Ast { file } => {
+        Some(Command::Ast { file }) => {
             cmd_ast(&file)
         }
-        Command::Ir { file } => {
+        Some(Command::Ir { file }) => {
             cmd_ir(&file)
         }
-        Command::Info => {
+        Some(Command::Info) => {
             cmd_info();
             Ok(())
+        }
+        None => {
+            cmd_repl()
         }
     }
 }
@@ -159,7 +151,7 @@ fn cmd_compile(
 
     let module_name = Path::new(file).file_stem().unwrap_or_default().to_string_lossy().to_string();
 
-    eprintln!("🔰 Vajra v0.2 — Compiling '{}' ...", file);
+    eprintln!("🔰 Vajra v0.1.0 — Compiling '{}' ...", file);
     eprintln!("   No LLVM, GCC, MSVC, or Clang required");
 
     // 1. Parse
@@ -254,7 +246,7 @@ fn cmd_exec(file: &str, _extra_args: &[String]) -> Result<()> {
         .with_context(|| format!("Cannot read '{}'", file))?;
 
     let program = parse(&source)?;
-    eprintln!("🔰 Vajra v0.2 — Executing '{}' (interpreter mode)", file);
+    eprintln!("🔰 Vajra v0.1.0 — Executing '{}' (interpreter mode)", file);
 
     let mut interpreter = eval::Interpreter::new();
     interpreter.run(&program);

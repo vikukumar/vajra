@@ -43,188 +43,25 @@ pub fn get_runtime_object_bytes(platform: &TargetPlatform) -> Vec<u8> {
 fn generate_windows_runtime() -> Vec<u8> {
     use object::write::{Object, StandardSection, Symbol, SymbolSection};
     use object::{Architecture, BinaryFormat, Endianness, SymbolKind, SymbolScope};
+    use object::write::Relocation;
+    use object::RelocationKind;
 
-    // Create minimal COFF object - just declare symbols that will link
-    // Actual implementations will be in system libraries (msvcrt, kernel32, etc.)
     let mut obj = Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little);
     let text = obj.section_id(StandardSection::Text);
-    
-    // Add a minimal ret stub for all runtime functions
-    let ret_stub: Vec<u8> = vec![0xC3]; // ret instruction
-    let stub_off = obj.append_section_data(text, &ret_stub, 16);
-    
-    // Symbol list for all runtime functions we export
-    let symbols = vec![
-        "vajra_runtime_init",
-        "vajra_print_str",
-        "vajra_print_i64",
-        "vajra_print_f64",
-        "vajra_print_auto",
-        "vajra_throw",
-        "vajra_alloc",
-        "vajra_free",
-        "vajra_exit",
-        "vajra_spawn",
-        "vajra_strlen",
-        "vajra_readline",
-    ];
-    
-    for sym_name in symbols {
-        obj.add_symbol(Symbol {
-            name: sym_name.as_bytes().to_vec(),
-            value: stub_off,
-            size: ret_stub.len() as u64,
-            kind: SymbolKind::Text,
-            scope: SymbolScope::Dynamic,
-            weak: false,
-            section: SymbolSection::Section(text),
-            flags: object::SymbolFlags::None,
-        });
-    }
+    let rdata = obj.section_id(StandardSection::ReadOnlyData);
 
-    obj.write().unwrap_or_default()
-}
-
-/// Generate the Linux runtime as an ELF object
-fn generate_linux_runtime() -> Vec<u8> {
-    let mut ext_syms = std::collections::HashMap::new();
-    for name in &["GetStdHandle", "WriteFile", "ExitProcess", "VirtualAlloc", "VirtualFree", "SetConsoleOutputCP"] {
-        let sym_id = obj.add_symbol(Symbol {
-            name: name.as_bytes().to_vec(),
-            value: 0, size: 0,
-            kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-            weak: false, section: SymbolSection::Undefined,
-            flags: object::SymbolFlags::None,
-        });
-        ext_syms.insert(name.to_string(), sym_id);
-    }
-
-    // ── Minimal stubs ──
-    // vajra_strlen - minimal string length function
-    let mut strlen_code: Vec<u8> = Vec::new();
-    strlen_code.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5]);
-    strlen_code.extend_from_slice(&[0x48, 0x31, 0xC0]); // xor rax, rax
-    strlen_code.extend_from_slice(&[0x80, 0x3C, 0x01, 0x00]); // cmp byte [rcx+rax], 0
-    strlen_code.extend_from_slice(&[0x74, 0x04]); // je .done
-    strlen_code.extend_from_slice(&[0x48, 0xFF, 0xC0]); // inc rax
-    strlen_code.extend_from_slice(&[0xEB, 0xF6]); // jmp .loop
-    strlen_code.extend_from_slice(&[0x5D, 0xC3]); // pop rbp; ret
-
-    let strlen_off = obj.append_section_data(text, &strlen_code, 16);
-    obj.add_symbol(Symbol {
-        name: b"vajra_strlen".to_vec(),
-        value: strlen_off, size: strlen_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
+    let newline_off = obj.append_section_data(rdata, b"\r\n", 2);
+    let sym_newline = obj.add_symbol(Symbol {
+        name: b"newline_char".to_vec(),
+        value: newline_off, size: 2,
+        kind: SymbolKind::Data, scope: SymbolScope::Compilation,
+        weak: false, section: SymbolSection::Section(rdata),
         flags: object::SymbolFlags::None,
     });
 
-    // vajra_print_str - delegate to external print_raw
-    let print_str_code: Vec<u8> = vec![0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3];
-    let pstr_off = obj.append_section_data(text, &print_str_code, 16);
-    obj.add_symbol(Symbol {
-        name: b"vajra_print_str".to_vec(),
-        value: pstr_off, size: print_str_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
-        flags: object::SymbolFlags::None,
-    });
-
-    // vajra_print_i64 - simple i64 print
-    let pi64_code: Vec<u8> = vec![0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3];
-    let pi64_off = obj.append_section_data(text, &pi64_code, 16);
-    obj.add_symbol(Symbol {
-        name: b"vajra_print_i64".to_vec(),
-        value: pi64_off, size: pi64_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
-        flags: object::SymbolFlags::None,
-    });
-
-    // vajra_print_f64 - simple f64 print
-    let pf64_code: Vec<u8> = vec![0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3];
-    let pf64_off = obj.append_section_data(text, &pf64_code, 16);
-    obj.add_symbol(Symbol {
-        name: b"vajra_print_f64".to_vec(),
-        value: pf64_off, size: pf64_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
-        flags: object::SymbolFlags::None,
-    });
-
-    // vajra_print_auto - generic printer
-    let pauto_code: Vec<u8> = vec![0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3];
-    obj.add_symbol(Symbol {
-        name: b"vajra_print_auto".to_vec(),
-        value: obj.append_section_data(text, &pauto_code, 16),
-        size: pauto_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
-        flags: object::SymbolFlags::None,
-    });
-
-    // vajra_throw - exception handler
-    let throw_code: Vec<u8> = vec![0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3];
-    obj.add_symbol(Symbol {
-        name: b"vajra_throw".to_vec(),
-        value: obj.append_section_data(text, &throw_code, 16),
-        size: throw_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
-        flags: object::SymbolFlags::None,
-    });
-
-    // vajra_runtime_init - initialize runtime
-    let init_code: Vec<u8> = vec![0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3];
-    obj.add_symbol(Symbol {
-        name: b"vajra_runtime_init".to_vec(),
-        value: obj.append_section_data(text, &init_code, 16),
-        size: init_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
-        flags: object::SymbolFlags::None,
-    });
-
-    // vajra_alloc - memory allocation
-    let alloc_code: Vec<u8> = vec![0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3];
-    obj.add_symbol(Symbol {
-        name: b"vajra_alloc".to_vec(),
-        value: obj.append_section_data(text, &alloc_code, 16),
-        size: alloc_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
-        flags: object::SymbolFlags::None,
-    });
-
-    // vajra_free - memory deallocation
-    let free_code: Vec<u8> = vec![0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3];
-    obj.add_symbol(Symbol {
-        name: b"vajra_free".to_vec(),
-        value: obj.append_section_data(text, &free_code, 16),
-        size: free_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
-        flags: object::SymbolFlags::None,
-    });
-
-    // vajra_exit - process exit
-    let exit_code: Vec<u8> = vec![0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3];
-    obj.add_symbol(Symbol {
-        name: b"vajra_exit".to_vec(),
-        value: obj.append_section_data(text, &exit_code, 16),
-        size: exit_code.len() as u64,
-        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-        weak: false, section: SymbolSection::Section(text),
-        flags: object::SymbolFlags::None,
-    });
-
-    obj.write().unwrap_or_default()
-}
-
-/// Generate the Linux runtime as an ELF object with direct syscall implementations
-fn generate_linux_runtime() -> Vec<u8> {
-    use object::write::{Object, StandardSection, Symbol, SymbolSection};
-    use object::{Architecture, BinaryFormat, Endianness, SymbolKind, SymbolScope};
+    let minus_off = obj.append_section_data(rdata, b"-", 1);
+    let sym_minus = obj.add_symbol(Symbol {
+        name: b"minus_char".to_vec(),
         value: minus_off, size: 1,
         kind: SymbolKind::Data, scope: SymbolScope::Compilation,
         weak: false, section: SymbolSection::Section(rdata),
@@ -259,7 +96,7 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     // Exception format string
-    let exc_off = obj.append_section_data(rdata, b"Exception: \0", 12);
+    let exc_off = obj.append_section_data(rdata, b"Exception: \0", 1);
     let sym_exc = obj.add_symbol(Symbol {
         name: b"exception_str".to_vec(),
         value: exc_off, size: 12,
@@ -281,15 +118,19 @@ fn generate_linux_runtime() -> Vec<u8> {
         ext_syms.insert(name.to_string(), sym_id);
     }
 
-    // ── vajra_strlen ──────────────────────────────────────────────────────
+    // ── vajra_strlen ─────────────────────────────────────────────────────
+    // Leaf function: rcx = ptr (null-terminated), returns rax = length
+    // No sub-calls, so no shadow space needed. Frame: push rbp only.
     let mut strlen_code: Vec<u8> = Vec::new();
-    strlen_code.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5]);
-    strlen_code.extend_from_slice(&[0x48, 0x31, 0xC0]); // xor rax, rax
-    strlen_code.extend_from_slice(&[0x80, 0x3C, 0x01, 0x00]); // cmp byte [rcx+rax], 0
-    strlen_code.extend_from_slice(&[0x74, 0x04]); // je .done (+4)
-    strlen_code.extend_from_slice(&[0x48, 0xFF, 0xC0]); // inc rax
-    strlen_code.extend_from_slice(&[0xEB, 0xF6]); // jmp .loop (-10)
-    strlen_code.extend_from_slice(&[0x5D, 0xC3]); // pop rbp; ret
+    strlen_code.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5]);   // push rbp; mov rbp, rsp
+    strlen_code.extend_from_slice(&[0x48, 0x31, 0xC0]);          // xor rax, rax
+    // .Lloop:
+    strlen_code.extend_from_slice(&[0x80, 0x3C, 0x01, 0x00]);    // cmp byte [rcx+rax], 0
+    strlen_code.extend_from_slice(&[0x74, 0x04]);                 // je .Ldone (+4)
+    strlen_code.extend_from_slice(&[0x48, 0xFF, 0xC0]);           // inc rax
+    strlen_code.extend_from_slice(&[0xEB, 0xF6]);                 // jmp .Lloop (-10)
+    // .Ldone:
+    strlen_code.extend_from_slice(&[0x5D, 0xC3]);                 // pop rbp; ret
 
     let strlen_off = obj.append_section_data(text, &strlen_code, 16);
     let sym_strlen = obj.add_symbol(Symbol {
@@ -301,19 +142,31 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     // ── print_raw helper ───────────────────────────────────────────────────
+    // Windows x64: rcx=ptr, rdx=len. Makes 2 sub-calls (GetStdHandle, WriteFile)
+    // Frame layout: push rbp (-8) + sub rsp,0x48 (-72) = total 80 bytes. With CALL (-8) = 88 % 16 = 8. WRONG.
+    // Correct: need (8 + frame + 32) % 16 == 0 at CALL sites.
+    // push rbp: -8. sub rsp,0x50 (-80): total = 88. At CALL (-8): 96 % 16 == 0. ✓
+    // frame = 0x50 = 80: locals at [rbp-8]=rcx, [rbp-16]=rdx, written bytes at [rbp-24]
     let mut draw_code: Vec<u8> = Vec::new();
-    draw_code.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x30]);
-    draw_code.extend_from_slice(&[0x48, 0x89, 0x4D, 0xF8]); // mov [rbp-8], rcx
-    draw_code.extend_from_slice(&[0x48, 0x89, 0x55, 0xF0]); // mov [rbp-16], rdx
-    draw_code.extend_from_slice(&[0xB9, 0xF5, 0xFF, 0xFF, 0xFF]); // mov ecx, -11
-    draw_code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call GetStdHandle (reloc offset 22)
-    draw_code.extend_from_slice(&[0x48, 0x89, 0xC1]); // mov rcx, rax
-    draw_code.extend_from_slice(&[0x48, 0x8B, 0x55, 0xF8]); // mov rdx, [rbp-8]
-    draw_code.extend_from_slice(&[0x4C, 0x8B, 0x45, 0xF0]); // mov r8, [rbp-16]
-    draw_code.extend_from_slice(&[0x4C, 0x8D, 0x4D, 0xE8]); // lea r9, [rbp-24]
-    draw_code.extend_from_slice(&[0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00]); // mov qword ptr [rsp+32], 0
-    draw_code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call WriteFile (reloc offset 51)
-    draw_code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x30, 0x5D, 0xC3]);
+    draw_code.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x50]); // push rbp; mov rbp,rsp; sub rsp,0x50
+    draw_code.extend_from_slice(&[0x48, 0x89, 0x4D, 0xF8]); // mov [rbp-8], rcx  (buf ptr)
+    draw_code.extend_from_slice(&[0x48, 0x89, 0x55, 0xF0]); // mov [rbp-16], rdx (len)
+    // call GetStdHandle(-11) with shadow space
+    draw_code.extend_from_slice(&[0xB9, 0xF5, 0xFF, 0xFF, 0xFF]); // mov ecx, -11 (STD_OUTPUT_HANDLE)
+    draw_code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]);        // sub rsp, 0x20 (shadow)
+    draw_code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]);  // call GetStdHandle (reloc offset 21)
+    draw_code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]);        // add rsp, 0x20 (restore)
+    // hStdOut -> rcx; setup WriteFile args
+    draw_code.extend_from_slice(&[0x48, 0x89, 0xC1]);              // mov rcx, rax       (hFile)
+    draw_code.extend_from_slice(&[0x48, 0x8B, 0x55, 0xF8]);        // mov rdx, [rbp-8]  (lpBuffer)
+    draw_code.extend_from_slice(&[0x4C, 0x8B, 0x45, 0xF0]);        // mov r8, [rbp-16]  (nNumberOfBytesToWrite)
+    draw_code.extend_from_slice(&[0x4C, 0x8D, 0x4D, 0xE8]);        // lea r9, [rbp-24]  (lpNumberOfBytesWritten)
+    // 5th param (lpOverlapped = NULL) goes on stack, but we use shadow space slot
+    draw_code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]);        // sub rsp, 0x20 (shadow)
+    draw_code.extend_from_slice(&[0xC7, 0x04, 0x24, 0x00, 0x00, 0x00, 0x00]); // mov [rsp], 0 (NULL lpOverlapped)
+    draw_code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]);  // call WriteFile (reloc offset 56)
+    draw_code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]);        // add rsp, 0x20
+    draw_code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x50, 0x5D, 0xC3]); // add rsp,0x50; pop rbp; ret
 
     let draw_off = obj.append_section_data(text, &draw_code, 16);
     let sym_print_raw = obj.add_symbol(Symbol {
@@ -325,26 +178,80 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: draw_off + 22, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: ext_syms["GetStdHandle"], addend: -4,
+
+
+        offset: draw_off + 26,
+
+
+        symbol: ext_syms["GetStdHandle"],
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: draw_off + 51, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: ext_syms["WriteFile"], addend: -4,
+
+
+        offset: draw_off + 61,
+
+
+        symbol: ext_syms["WriteFile"],
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
-    // ── vajra_print_str ────────────────────────────────────────────────────
+    // ── vajra_print_str ────────────────────────────────────────────────
+    // rcx = null-terminated string ptr. Calls strlen then print_raw.
+    // Frame = 0x38 (56): (8+56)%16==0 ✓ — RSP is 16-aligned before each CALL (after shadow sub)
     let mut pstr_code: Vec<u8> = Vec::new();
-    pstr_code.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x20]);
+    pstr_code.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x38]); // push rbp; mov rbp,rsp; sub rsp,0x38
     pstr_code.extend_from_slice(&[0x48, 0x89, 0x4D, 0xF8]); // mov [rbp-8], rcx
-    pstr_code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call strlen (reloc offset 13)
+    // call strlen with shadow space
+    pstr_code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 0x20
+    pstr_code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call strlen (reloc offset 17)
+    pstr_code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 0x20
+    // call print_raw(ptr, len)
     pstr_code.extend_from_slice(&[0x48, 0x8B, 0x4D, 0xF8]); // mov rcx, [rbp-8]
-    pstr_code.extend_from_slice(&[0x48, 0x89, 0xC2]); // mov rdx, rax
-    pstr_code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call print_raw (reloc offset 25)
-    pstr_code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3]);
+    pstr_code.extend_from_slice(&[0x48, 0x89, 0xC2]);        // mov rdx, rax (len from strlen)
+    pstr_code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 0x20
+    pstr_code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call print_raw (reloc offset 36)
+    pstr_code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 0x20
+    pstr_code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x38, 0x5D, 0xC3]); // add rsp,0x38; pop rbp; ret
 
     let pstr_off = obj.append_section_data(text, &pstr_code, 16);
     let sym_print_str = obj.add_symbol(Symbol {
@@ -356,16 +263,27 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: pstr_off + 13, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_strlen, addend: -4,
+        offset: pstr_off + 17,
+        symbol: sym_strlen,
+        addend: -4,
+        flags: object::RelocationFlags::Generic {
+            kind: object::RelocationKind::Relative,
+            encoding: object::RelocationEncoding::Generic,
+            size: 32,
+        },
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pstr_off + 25, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_raw, addend: -4,
+        offset: pstr_off + 37,
+        symbol: sym_print_raw,
+        addend: -4,
+        flags: object::RelocationFlags::Generic {
+            kind: object::RelocationKind::Relative,
+            encoding: object::RelocationEncoding::Generic,
+            size: 32,
+        },
     }).unwrap();
+
 
     // ── print_i64_no_newline ───────────────────────────────────────────────
     let mut pi64_nn_code: Vec<u8> = Vec::new();
@@ -408,9 +326,32 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: pi64_nn_off + 90, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_raw, addend: -4,
+
+
+        offset: pi64_nn_off + 90,
+
+
+        symbol: sym_print_raw,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     // ── vajra_print_i64 ───────────────────────────────────────────────────
@@ -433,21 +374,90 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: pi64_off + 12, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_i64_nn, addend: -4,
+
+
+        offset: pi64_off + 12,
+
+
+        symbol: sym_print_i64_nn,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pi64_off + 19, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_newline, addend: -4,
+
+
+        offset: pi64_off + 19,
+
+
+        symbol: sym_newline,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pi64_off + 32, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_raw, addend: -4,
+
+
+        offset: pi64_off + 32,
+
+
+        symbol: sym_print_raw,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     // ── vajra_print_f64 ───────────────────────────────────────────────────
@@ -540,69 +550,322 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 28, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_minus, addend: -4,
+
+
+        offset: pf64_off + 28,
+
+
+        symbol: sym_minus,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 40, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_raw, addend: -4,
+
+
+        offset: pf64_off + 40,
+
+
+        symbol: sym_print_raw,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 94, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_million, addend: -4,
+
+
+        offset: pf64_off + 94,
+
+
+        symbol: sym_million,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 127, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_i64_nn, addend: -4,
+
+
+        offset: pf64_off + 127,
+
+
+        symbol: sym_print_i64_nn,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 135, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_dot, addend: -4,
+
+
+        offset: pf64_off + 135,
+
+
+        symbol: sym_dot,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 147, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_raw, addend: -4,
+
+
+        offset: pf64_off + 147,
+
+
+        symbol: sym_print_raw,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 222, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_zero, addend: -4,
+
+
+        offset: pf64_off + 222,
+
+
+        symbol: sym_zero,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 234, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_raw, addend: -4,
+
+
+        offset: pf64_off + 234,
+
+
+        symbol: sym_print_raw,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 254, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_i64_nn, addend: -4,
+
+
+        offset: pf64_off + 254,
+
+
+        symbol: sym_print_i64_nn,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 262, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_newline, addend: -4,
+
+
+        offset: pf64_off + 262,
+
+
+        symbol: sym_newline,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: pf64_off + 274, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_raw, addend: -4,
+
+
+        offset: pf64_off + 274,
+
+
+        symbol: sym_print_raw,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     // ── vajra_throw ───────────────────────────────────────────────────────
@@ -631,39 +894,177 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: throw_off + 15, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_exc, addend: -4,
+
+
+        offset: throw_off + 15,
+
+
+        symbol: sym_exc,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: throw_off + 31, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_raw, addend: -4,
+
+
+        offset: throw_off + 31,
+
+
+        symbol: sym_print_raw,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: throw_off + 40, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_str, addend: -4,
+
+
+        offset: throw_off + 40,
+
+
+        symbol: sym_print_str,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: throw_off + 47, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_newline, addend: -4,
+
+
+        offset: throw_off + 47,
+
+
+        symbol: sym_newline,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: throw_off + 59, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_raw, addend: -4,
+
+
+        offset: throw_off + 59,
+
+
+        symbol: sym_print_raw,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.add_relocation(text, Relocation {
-        offset: throw_off + 69, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: ext_syms["ExitProcess"], addend: -4,
+
+
+        offset: throw_off + 69,
+
+
+        symbol: ext_syms["ExitProcess"],
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     // ── vajra_runtime_init ─────────────────────────────────────────────────
@@ -683,9 +1084,32 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: init_off + 14, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: ext_syms["SetConsoleOutputCP"], addend: -4,
+
+
+        offset: init_off + 14,
+
+
+        symbol: ext_syms["SetConsoleOutputCP"],
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     // ── vajra_alloc ────────────────────────────────────────────────────────
@@ -708,9 +1132,32 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: alloc_off + 26, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: ext_syms["VirtualAlloc"], addend: -4,
+
+
+        offset: alloc_off + 26,
+
+
+        symbol: ext_syms["VirtualAlloc"],
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     // ── vajra_free ────────────────────────────────────────────────────────
@@ -731,9 +1178,32 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: free_off + 18, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: ext_syms["VirtualFree"], addend: -4,
+
+
+        offset: free_off + 18,
+
+
+        symbol: ext_syms["VirtualFree"],
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     // ── vajra_exit ────────────────────────────────────────────────────────
@@ -752,9 +1222,32 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: exit_off + 9, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: ext_syms["ExitProcess"], addend: -4,
+
+
+        offset: exit_off + 9,
+
+
+        symbol: ext_syms["ExitProcess"],
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     // ── vajra_print_auto ───────────────────────────────────────────────────
@@ -805,9 +1298,32 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     obj.add_relocation(text, Relocation {
-        offset: readline_off + 11, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_zero, addend: -4,
+
+
+        offset: readline_off + 11,
+
+
+        symbol: sym_zero,
+
+
+        addend: -4,
+
+
+        flags: object::RelocationFlags::Generic {
+
+
+            kind: object::RelocationKind::Relative,
+
+
+            encoding: object::RelocationEncoding::Generic,
+
+
+            size: 32,
+
+
+        },
+
+
     }).unwrap();
 
     obj.write().unwrap_or_default()
@@ -934,7 +1450,7 @@ fn generate_linux_runtime() -> Vec<u8> {
     pstr.extend_from_slice(&[0x5D, 0xC3]); // pop rbp; ret
 
     let pstr_off = obj.append_section_data(text, &pstr, 16);
-    obj.add_symbol(Symbol {
+    let sym_print_str = obj.add_symbol(Symbol {
         name: b"vajra_print_str".to_vec(),
         value: pstr_off, size: pstr.len() as u64,
         kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
@@ -1040,11 +1556,25 @@ fn generate_linux_runtime() -> Vec<u8> {
     });
 
     use object::write::Relocation;
-    use object::{RelocationKind, RelocationSubKind};
+    use object::RelocationKind;
     obj.add_relocation(text, Relocation {
-        offset: throw_off + 5, size: 32,
-        kind: RelocationKind::Relative, subkind: RelocationSubKind::None,
-        symbol: sym_print_str, addend: -4,
+
+        offset: throw_off + 5,
+
+        symbol: sym_print_str,
+
+        addend: -4,
+
+        flags: object::RelocationFlags::Generic {
+
+            kind: object::RelocationKind::Relative,
+
+            encoding: object::RelocationEncoding::Generic,
+
+            size: 32,
+
+        },
+
     }).unwrap();
 
     // ── vajra_spawn, vajra_strlen, vajra_readline ──────────────────────────

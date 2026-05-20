@@ -70,15 +70,17 @@ impl Interpreter {
             self.hoist_functions(stmt);
         }
         // Second pass: execute top-level statements and detect main
-        let mut has_main = false;
+        let mut main_func_name = None;
         for stmt in &program.statements {
             let is_fn = matches!(stmt,
                 Statement::Function { .. } | Statement::Method { .. } | Statement::Class { .. }
             );
-            // Check if 'main' is defined
+            // Check if main is defined (by checking the is_main flag)
             match stmt {
-                Statement::Function { name, .. } | Statement::Method { name, .. } => {
-                    if name == "main" { has_main = true; }
+                Statement::Function { name, is_main, .. } => {
+                    if *is_main {
+                        main_func_name = Some(name.clone());
+                    }
                 }
                 _ => {}
             }
@@ -89,10 +91,10 @@ impl Interpreter {
                 }
             }
         }
-        // Auto-invoke main() if it exists
-        if has_main {
+        // Auto-invoke main if it exists
+        if let Some(name) = main_func_name {
             let main_call = Statement::Expression(Expression::FunctionCall {
-                name: "main".to_string(),
+                name,
                 args: vec![],
             });
             match self.eval_statement(&main_call) {
