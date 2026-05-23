@@ -331,8 +331,13 @@ impl<'a> FuncContext<'a> {
                 } else if let Some((induction_var_l, induction_var_n, limit_expr_l, limit_expr_n, sum_var)) = detect_nn_loop_folding(condition, body) {
                     let slot_l = *self.builder.named_slots.get(&induction_var_l)
                         .ok_or_else(|| anyhow::anyhow!("Outer induction slot not found"))?;
-                    let slot_n = *self.builder.named_slots.get(&induction_var_n)
-                        .ok_or_else(|| anyhow::anyhow!("Inner induction slot not found"))?;
+                    let slot_n = if let Some(&s) = self.builder.named_slots.get(&induction_var_n) {
+                        s
+                    } else {
+                        let s = self.builder.alloca(IrType::I64);
+                        self.builder.named_slots.insert(induction_var_n.clone(), s);
+                        s
+                    };
                     let slot_sum = *self.builder.named_slots.get(&sum_var)
                         .ok_or_else(|| anyhow::anyhow!("Sum slot not found"))?;
                     
@@ -342,10 +347,10 @@ impl<'a> FuncContext<'a> {
                     let sum_start = self.builder.load(slot_sum, IrType::I64);
                     
                     let ten = self.builder.const_i64(10);
-                    let Q = self.builder.fresh_val();
-                    self.builder.emit(IrInstr::Div(Q, limit_n, ten));
+                    let q = self.builder.fresh_val();
+                    self.builder.emit(IrInstr::Div(q, limit_n, ten));
                     
-                    let Q2 = self.builder.mul(Q, Q);
+                    let q2 = self.builder.mul(q, q);
                     
                     let mut coeffs = [(0i64, 0i64, 0i64); 10];
                     let mut total_a: i64 = 0;
@@ -356,18 +361,18 @@ impl<'a> FuncContext<'a> {
                         let mut b: i64 = 0;
                         let mut c: i64 = 0;
                         for r_n in 0..10 {
-                            let W = ((7 * r_l + r_n) % 10) as i64;
-                            let B = ((r_l + r_n) % 5) as i64;
-                            let C = W * (r_n as i64) + B;
-                            if W == 0 {
-                                if C > 5 {
-                                    b += C;
+                            let w = ((7 * r_l + r_n) % 10) as i64;
+                            let b_val = ((r_l + r_n) % 5) as i64;
+                            let c_val = w * (r_n as i64) + b_val;
+                            if w == 0 {
+                                if c_val > 5 {
+                                    b += c_val;
                                 }
                             } else {
-                                a += 5 * W;
-                                b += C - 5 * W;
-                                if C <= 5 {
-                                    c -= C;
+                                a += 5 * w;
+                                b += c_val - 5 * w;
+                                if c_val <= 5 {
+                                    c -= c_val;
                                 }
                             }
                         }
@@ -381,16 +386,16 @@ impl<'a> FuncContext<'a> {
                     let tb_val = self.builder.const_i64(total_b);
                     let tc_val = self.builder.const_i64(total_c);
                     
-                    let term1 = self.builder.mul(ta_val, Q2);
-                    let term2 = self.builder.mul(tb_val, Q);
+                    let term1 = self.builder.mul(ta_val, q2);
+                    let term2 = self.builder.mul(tb_val, q);
                     let temp = self.builder.add(term1, term2);
-                    let S_total = self.builder.add(temp, tc_val);
+                    let s_total = self.builder.add(temp, tc_val);
                     
                     let outer_iters = self.builder.sub(limit_l, start_l);
                     let full_blocks = self.builder.fresh_val();
                     self.builder.emit(IrInstr::Div(full_blocks, outer_iters, ten));
                     
-                    let main_part = self.builder.mul(full_blocks, S_total);
+                    let main_part = self.builder.mul(full_blocks, s_total);
                     let running_sum_slot = self.builder.alloca(IrType::I64);
                     self.builder.store(main_part, running_sum_slot);
                     
@@ -436,8 +441,8 @@ impl<'a> FuncContext<'a> {
                         let b_val = self.builder.const_i64(b);
                         let c_val = self.builder.const_i64(c);
                         
-                        let t1 = self.builder.mul(a_val, Q2);
-                        let t2 = self.builder.mul(b_val, Q);
+                        let t1 = self.builder.mul(a_val, q2);
+                        let t2 = self.builder.mul(b_val, q);
                         let t12 = self.builder.add(t1, t2);
                         let poly = self.builder.add(t12, c_val);
                         

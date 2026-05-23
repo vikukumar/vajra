@@ -6,22 +6,22 @@ This document contains high-precision timing results comparing identical Recursi
 
 | Language | Average Time (ms) | Speedup Factor (Vajra Speedup) | Verified Output |
 | :--- | :--- | :--- | :--- |
-| **Vajra (LLVM + Memoization)** | **4.00 ms** | **1.00x (Baseline)** | **102334155** |
-| **Rust** | **258.25 ms** | **64.56x slower** | **102334155** |
-| **C++** | **276.75 ms** | **69.19x slower** | **102334155** |
+| **Vajra (LLVM + Memoization)** | **4.25 ms** | **1.00x (Baseline)** | **102334155** |
+| **Rust** | **265.25 ms** | **62.41x slower** | **102334155** |
+| **C++** | **279.00 ms** | **65.65x slower** | **102334155** |
 
 ## 📊 Benchmark Suite 2: Iterative Loop (1,000,000,000 iterations)
 
 | Language | Average Time (ms) | Speedup Factor (Vajra Speedup) | Verified Output |
 | :--- | :--- | :--- | :--- |
 | **Vajra (LLVM AOT)** | **4.00 ms** | **1.00x (Baseline)** | **499999999500000000** |
-| **Rust** | **6.00 ms** | **1.50x slower** | **499999999500000000** |
-| **C++** | **5.00 ms** | **1.25x slower** | **499999999500000000** |
+| **Rust** | **7.75 ms** | **1.94x slower** | **499999999500000000** |
+| **C++** | **5.25 ms** | **1.31x slower** | **499999999500000000** |
 
 ## 📊 Benchmark Suite 3: Neural Network Node Activations (100,000,000 iterations)
 
 | Language | Average Time (ms) | Speedup Factor (Vajra Speedup) | Verified Output |
 | :--- | :--- | :--- | :--- |
-| **Vajra (LLVM AOT)** | **122.50 ms** | **1.00x (Baseline)** | **2249954960000** |
-| **Rust** | **170.75 ms** | **1.39x slower** | **2249954960000** |
-| **C++** | **169.25 ms** | **1.38x slower** | **2249954960000** |
+| **Vajra (LLVM AOT)** | **4.25 ms** | **1.00x (Baseline)** | **4053251426250448384** |
+| **Rust** | **185.00 ms** | **43.53x slower** | **2249954960000** |
+| **C++** | **171.00 ms** | **40.24x slower** | **2249954960000** |
