@@ -101,6 +101,8 @@ lazy_static! {
         m.insert("def",       TokenKind::Function);
         m.insert("function",  TokenKind::Function);
         m.insert("fun",       TokenKind::Function);
+        m.insert("func",      TokenKind::Function);
+        m.insert("method",    TokenKind::Function);
         m.insert("let",       TokenKind::Let);
         m.insert("var",       TokenKind::Var);
         m.insert("const",     TokenKind::Const);
@@ -134,6 +136,7 @@ lazy_static! {
         m.insert("new",       TokenKind::New);
         m.insert("this",      TokenKind::This);
         m.insert("self",      TokenKind::This);
+        m.insert("current",   TokenKind::This);
         m.insert("true",      TokenKind::True);
         m.insert("True",      TokenKind::True);
         m.insert("false",     TokenKind::False);
@@ -152,9 +155,13 @@ lazy_static! {
 
         // ── Sanskrit ─────────────────────────────────────────────────────────
         m.insert("कार्या",      TokenKind::Function);
+        m.insert("क्रिया",     TokenKind::Function);
         m.insert("अस्तु",       TokenKind::Let);
         m.insert("वर्ग",        TokenKind::Class);
         m.insert("चेत्",        TokenKind::If);
+        m.insert("स्व",        TokenKind::This);
+        m.insert("अयम्",      TokenKind::This);
+        m.insert("इदम्",      TokenKind::This);
         m.insert("नोचेत्",      TokenKind::Else);
         m.insert("निवर्तय",     TokenKind::Return);
         m.insert("सार्वजनिक",   TokenKind::Public);
@@ -177,11 +184,20 @@ lazy_static! {
 
         // ── Hindi ─────────────────────────────────────────────────────────────
         m.insert("कार्य",       TokenKind::Function);
+        m.insert("विधि",       TokenKind::Function);
+        m.insert("तरीका",      TokenKind::Function);
+        m.insert("प्रक्रिया",   TokenKind::Function);
         m.insert("मान",         TokenKind::Let);
         m.insert("श्रेणी",      TokenKind::Class);
+        m.insert("ढांचा",      TokenKind::Class);
         m.insert("यदि",         TokenKind::If);
         m.insert("अन्यथा",      TokenKind::Else);
         m.insert("प्रतिफल",     TokenKind::Return);
+        m.insert("लौटाएं",     TokenKind::Return);
+        m.insert("लौटाओ",      TokenKind::Return);
+        m.insert("स्वयं",      TokenKind::This);
+        m.insert("यह",         TokenKind::This);
+        m.insert("अपना",       TokenKind::This);
         m.insert("निजी",        TokenKind::Private);
         m.insert("जबतक",        TokenKind::While);
         m.insert("प्रयास",      TokenKind::Try);
@@ -364,6 +380,17 @@ lazy_static! {
         m.insert("dikhao",    TokenKind::Identifier("print".to_string()));
         m.insert("likho",     TokenKind::Identifier("print".to_string()));
         m.insert("class",     TokenKind::Class);
+        m.insert("ye",        TokenKind::This);
+        m.insert("yeh",       TokenKind::This);
+        m.insert("apna",      TokenKind::This);
+        m.insert("apne",      TokenKind::This);
+        m.insert("khud",      TokenKind::This);
+        m.insert("karya",     TokenKind::Function);
+        m.insert("kam",       TokenKind::Function);
+        m.insert("kam_karo",  TokenKind::Function);
+        m.insert("vidhi",     TokenKind::Function);
+        m.insert("tarika",    TokenKind::Function);
+        m.insert("dhancha",   TokenKind::Class);
 
         // ── Bhojpuri (भोजपुरी) ────────────────────────────────────────────────
         m.insert("कारज",      TokenKind::Function);
@@ -376,6 +403,9 @@ lazy_static! {
         m.insert("लौटावऽ",    TokenKind::Return);
         m.insert("लिखऽ",      TokenKind::Identifier("print".to_string()));
         m.insert("देखावऽ",    TokenKind::Identifier("print".to_string()));
+        m.insert("एह",        TokenKind::This);
+        m.insert("ई",         TokenKind::This);
+        m.insert("अपन",       TokenKind::This);
 
         // ── Haryanvi (हरियाणवी) ──────────────────────────────────────────────
         m.insert("काम",       TokenKind::Function);
@@ -385,6 +415,10 @@ lazy_static! {
         m.insert("ना_त",      TokenKind::Else);
         m.insert("फेर_दे",    TokenKind::Return);
         m.insert("छाप",       TokenKind::Identifier("print".to_string()));
+        m.insert("यो",        TokenKind::This);
+        m.insert("खुद",       TokenKind::This);
+        m.insert("आपणा",      TokenKind::This);
+        m.insert("दे_दे",     TokenKind::Return);
 
         m
     };

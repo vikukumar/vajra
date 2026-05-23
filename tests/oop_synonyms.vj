@@ -1,0 +1,15 @@
+# tests/oop_synonyms.vj
+# A test verifying multi-dialect keyword synonyms (this, self, ye, khud, apna, fn, method, kriya)
+
+श्रेणी Person:
+    विधि init(naam):
+        अपना.naam = naam
+
+    तरीका greet():
+        लिखो("Namaste, mera naam hai:")
+        लिखो(स्वयं.naam)
+
+@main
+कार्या मुख्य():
+    अस्तु p = new Person("Vijay")
+    p.greet()
