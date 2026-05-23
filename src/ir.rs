@@ -226,6 +226,24 @@ impl IrModule {
             extern_functions: Vec::new(),
         }
     }
+
+    pub fn merge(&mut self, other: IrModule) {
+        for func in other.functions {
+            if !self.functions.iter().any(|f| f.name == func.name) {
+                self.functions.push(func);
+            }
+        }
+        for global in other.globals {
+            if !self.globals.iter().any(|g| g.name == global.name) {
+                self.globals.push(global);
+            }
+        }
+        for ext in other.extern_functions {
+            if !self.extern_functions.contains(&ext) {
+                self.extern_functions.push(ext);
+            }
+        }
+    }
 }
 
 /// IR Builder — stateful builder for constructing IR functions

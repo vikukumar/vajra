@@ -146,7 +146,7 @@ fn build_import_table_bytes(
 }
 
 fn build_dos_stub() -> Vec<u8> {
-    let mut stub = vec![
+    let stub = vec![
         0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00,
         0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00,
         0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -174,7 +174,7 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
     for (obj, file_id) in [(&user_obj, 0), (&rt_obj, 1)] {
         for sec in obj.sections() {
             let name = sec.name().unwrap_or("").to_string();
-            let data = sec.data().unwrap_or(&[]).to_vec();
+            let mut data = sec.data().unwrap_or(&[]).to_vec();
             let sec_idx = sec.index();
 
             if name == ".text" || name == "text" || sec.kind() == object::SectionKind::Text {
@@ -197,8 +197,11 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
                     start_offset: aligned,
                 });
                 rdata_len = aligned + sec.size() as usize;
-            } else if name == ".data" || name == "data" || sec.kind() == object::SectionKind::Data {
+            } else if name == ".data" || name == "data" || name == ".bss" || sec.kind() == object::SectionKind::Data || sec.kind() == object::SectionKind::UninitializedData {
                 let aligned = align_offset(data_len, 16);
+                if name == ".bss" || sec.kind() == object::SectionKind::UninitializedData {
+                    data.resize(sec.size() as usize, 0);
+                }
                 data_chunks.push(SectionChunk {
                     file_id,
                     section_index: sec_idx,
@@ -285,8 +288,10 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
                         let sec_rva = match chunk.name.as_str() {
                             ".text" | "text" => text_rva,
                             ".rdata" | "rdata" | ".rodata" => rdata_rva,
-                            ".data" | "data" => data_rva,
-                            _ => text_rva,
+                            ".data" | "data" | ".bss" => data_rva,
+                            _ => {
+                                if chunk.name.starts_with(".bss") { data_rva } else { text_rva }
+                            }
                         };
                         let final_rva = sec_rva + chunk.start_offset as u32 + sym.address() as u32;
                         symbol_vas.insert(name.to_string(), final_rva);
@@ -312,8 +317,14 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
         let (merged_buf, sec_rva) = match chunk.name.as_str() {
             ".text" | "text" => (&mut text_merged, text_rva),
             ".rdata" | "rdata" | ".rodata" => (&mut rdata_merged, rdata_rva),
-            ".data" | "data" => (&mut data_merged, data_rva),
-            _ => continue,
+            ".data" | "data" | ".bss" => (&mut data_merged, data_rva),
+            _ => {
+                if chunk.name.starts_with(".bss") {
+                    (&mut data_merged, data_rva)
+                } else {
+                    continue;
+                }
+            }
         };
 
         for (reloc_offset, reloc) in sec.relocations() {
@@ -331,8 +342,10 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
                                             let c_sec_rva = match c.name.as_str() {
                                                 ".text" | "text" => text_rva,
                                                 ".rdata" | "rdata" | ".rodata" => rdata_rva,
-                                                ".data" | "data" => data_rva,
-                                                _ => text_rva,
+                                                ".data" | "data" | ".bss" => data_rva,
+                                                _ => {
+                                                    if c.name.starts_with(".bss") { data_rva } else { text_rva }
+                                                }
                                             };
                                             found_va = c_sec_rva + c.start_offset as u32 + sym.address() as u32;
                                             break;
@@ -357,8 +370,10 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
                             let c_sec_rva = match c.name.as_str() {
                                 ".text" | "text" => text_rva,
                                 ".rdata" | "rdata" | ".rodata" => rdata_rva,
-                                ".data" | "data" => data_rva,
-                                _ => text_rva,
+                                ".data" | "data" | ".bss" => data_rva,
+                                _ => {
+                                    if c.name.starts_with(".bss") { data_rva } else { text_rva }
+                                }
                             };
                             found_va = c_sec_rva + c.start_offset as u32;
                             break;

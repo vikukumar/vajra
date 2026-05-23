@@ -9,6 +9,7 @@ pub mod codegen;
 pub mod linker;
 pub mod runtime;
 pub mod eval;
+pub mod lint;
 
 pub use ast::Program;
 pub use lexer::Lexer;

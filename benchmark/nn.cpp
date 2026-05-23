@@ -2,7 +2,7 @@
 
 int main() {
     long long sum = 0;
-    long long layers = 1000000;
+    long long layers = 10000;
     long long nodes = 10000;
     
     long long l = 0;

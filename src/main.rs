@@ -3,13 +3,16 @@
 /// Supports: compile, run, build, test — all without LLVM, GCC, MSVC, Clang
 
 use std::fs;
-
 use std::path::Path;
-use anyhow::{bail, Context, Result};
+use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
+use std::thread;
+use anyhow::{Context, Result};
 use clap::{Parser as ClapParser, Subcommand};
 
 use vajra_core::{
-    ast::Program,
+    ast::{Program, Statement},
+    ir::IrModule,
     codegen::{self, ast_to_ir, Backend},
     eval,
     lexer::Lexer,
@@ -57,6 +60,9 @@ enum Command {
         /// Optional source file (defaults to main.vajra)
         #[arg(default_value = "main.vajra")]
         file: String,
+        /// Output executable path
+        #[arg(short, long, default_value = "")]
+        output: String,
         /// Release mode (optimization on)
         #[arg(long)]
         release: bool,
@@ -84,6 +90,11 @@ enum Command {
         /// Source file
         file: String,
     },
+    /// Lint a Vajra file for style, unused variables, and potential issues
+    Lint {
+        /// Source file
+        file: String,
+    },
     /// Show the AST for a source file (debugging tool)
     Ast {
         /// Source file
@@ -105,8 +116,8 @@ fn main() -> Result<()> {
         Some(Command::Compile { file, output, target, opt, emit_ir, emit_obj }) => {
             cmd_compile(&file, &output, &target, opt, emit_ir, emit_obj)
         }
-        Some(Command::Build { file, release }) => {
-            cmd_build(&file, release)
+        Some(Command::Build { file, output, release }) => {
+            cmd_build(&file, &output, release)
         }
         Some(Command::Run { file, args }) => {
             cmd_run(&file, &args)
@@ -119,6 +130,9 @@ fn main() -> Result<()> {
         }
         Some(Command::Check { file }) => {
             cmd_check(&file)
+        }
+        Some(Command::Lint { file }) => {
+            cmd_lint(&file)
         }
         Some(Command::Ast { file }) => {
             cmd_ast(&file)
@@ -142,25 +156,22 @@ fn cmd_compile(
     file: &str,
     output: &str,
     target: &str,
-    opt_level: u8,
+    _opt_level: u8,
     emit_ir: bool,
     emit_obj: bool,
 ) -> Result<()> {
-    let source = fs::read_to_string(file)
-        .with_context(|| format!("Cannot read '{}'", file))?;
-
-    let module_name = Path::new(file).file_stem().unwrap_or_default().to_string_lossy().to_string();
-
     eprintln!("🔰 Vajra v0.1.0 — Compiling '{}' ...", file);
     eprintln!("   No LLVM, GCC, MSVC, or Clang required");
 
-    // 1. Parse
-    let program = parse(&source)?;
-    eprintln!("   ✓ Parsed {} top-level statements", program.statements.len());
+    // 1. Concurrent Compile and Merge
+    let compiled_files = Arc::new(Mutex::new(HashSet::new()));
+    let canonical_entry = Path::new(file).canonicalize()
+        .with_context(|| format!("Failed to canonicalize entry path: '{}'", file))?
+        .to_string_lossy()
+        .to_string();
+    compiled_files.lock().unwrap().insert(canonical_entry);
 
-    // 2. Lower to IR
-    let ir_module = ast_to_ir::lower(&program, &module_name)
-        .with_context(|| "AST→IR lowering failed")?;
+    let ir_module = compile_module_transitively(file, compiled_files)?;
     eprintln!("   ✓ IR generated ({} functions)", ir_module.functions.len());
 
     if emit_ir {
@@ -210,10 +221,10 @@ fn cmd_compile(
     Ok(())
 }
 
-fn cmd_build(file: &str, release: bool) -> Result<()> {
+fn cmd_build(file: &str, output: &str, release: bool) -> Result<()> {
     let opt = if release { 3 } else { 0 };
     eprintln!("🔨 Building '{}' (release={})", file, release);
-    cmd_compile(file, "", "", opt, false, false)
+    cmd_compile(file, output, "", opt, false, false)
 }
 
 fn cmd_run(file: &str, extra_args: &[String]) -> Result<()> {
@@ -234,10 +245,30 @@ fn cmd_run(file: &str, extra_args: &[String]) -> Result<()> {
     eprintln!("\n🚀 Running '{}' ...\n", exe_name);
     let status = std::process::Command::new(&exe_name)
         .args(extra_args)
-        .status()
-        .with_context(|| format!("Failed to execute '{}'", exe_name))?;
+        .status();
 
+    // Clean up temporary executable
+    let _ = std::fs::remove_file(&exe_name);
+
+    let status = status.with_context(|| format!("Failed to execute '{}'", exe_name))?;
     std::process::exit(status.code().unwrap_or(0));
+}
+
+fn cmd_lint(file: &str) -> Result<()> {
+    let source = fs::read_to_string(file)
+        .with_context(|| format!("Cannot read '{}'", file))?;
+    let program = parse(&source)?;
+    let mut linter = vajra_core::lint::Linter::new();
+    linter.lint_program(&program);
+    if linter.warnings.is_empty() {
+        println!("✨ No lint warnings found in '{}'.", file);
+    } else {
+        println!("⚠️ Found {} lint warnings in '{}':", linter.warnings.len(), file);
+        for warning in &linter.warnings {
+            println!("  {}", warning);
+        }
+    }
+    Ok(())
 }
 
 fn cmd_exec(file: &str, _extra_args: &[String]) -> Result<()> {
@@ -352,12 +383,14 @@ fn cmd_repl() -> Result<()> {
 }
 
 fn cmd_check(file: &str) -> Result<()> {
-    let source = fs::read_to_string(file)
-        .with_context(|| format!("Cannot read '{}'", file))?;
-    let module_name = Path::new(file).file_stem().unwrap_or_default().to_string_lossy();
+    let compiled_files = Arc::new(Mutex::new(HashSet::new()));
+    let canonical_entry = Path::new(file).canonicalize()
+        .with_context(|| format!("Failed to canonicalize entry path: '{}'", file))?
+        .to_string_lossy()
+        .to_string();
+    compiled_files.lock().unwrap().insert(canonical_entry);
 
-    let program = parse(&source)?;
-    ast_to_ir::lower(&program, &module_name)
+    let _ir_module = compile_module_transitively(file, compiled_files)
         .with_context(|| "IR lowering error")?;
 
     eprintln!("✅ '{}' is valid Vajra code", file);
@@ -372,10 +405,14 @@ fn cmd_ast(file: &str) -> Result<()> {
 }
 
 fn cmd_ir(file: &str) -> Result<()> {
-    let source = fs::read_to_string(file)?;
-    let module_name = Path::new(file).file_stem().unwrap_or_default().to_string_lossy();
-    let program = parse(&source)?;
-    let ir = ast_to_ir::lower(&program, &module_name)?;
+    let compiled_files = Arc::new(Mutex::new(HashSet::new()));
+    let canonical_entry = Path::new(file).canonicalize()
+        .with_context(|| format!("Failed to canonicalize entry path: '{}'", file))?
+        .to_string_lossy()
+        .to_string();
+    compiled_files.lock().unwrap().insert(canonical_entry);
+
+    let ir = compile_module_transitively(file, compiled_files)?;
     print_ir(&ir);
     Ok(())
 }
@@ -408,7 +445,75 @@ fn cmd_info() {
     println!("╚══════════════════════════════════════════════════════════════════╝");
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+fn get_imports(program: &Program) -> Vec<String> {
+    let mut imports = Vec::new();
+    for stmt in &program.statements {
+        if let Statement::Import(path) = stmt {
+            imports.push(path.clone());
+        }
+    }
+    imports
+}
+
+fn resolve_import_path(current_file: &str, import_name: &str) -> Result<String> {
+    let current_dir = Path::new(current_file).parent().unwrap_or(Path::new(""));
+    let mut target_path = current_dir.join(import_name);
+    if !target_path.exists() {
+        let name_str = import_name.to_string();
+        if !name_str.ends_with(".vj") && !name_str.ends_with(".vajra") {
+            let try_vj = current_dir.join(format!("{}.vj", name_str));
+            if try_vj.exists() {
+                target_path = try_vj;
+            } else {
+                let try_vajra = current_dir.join(format!("{}.vajra", name_str));
+                if try_vajra.exists() {
+                    target_path = try_vajra;
+                }
+            }
+        }
+    }
+    let canonical = target_path.canonicalize()
+        .with_context(|| format!("Failed to canonicalize import path: {:?}", target_path))?;
+    Ok(canonical.to_string_lossy().to_string())
+}
+
+fn compile_module_transitively(
+    file_path: &str,
+    compiled_files: Arc<Mutex<HashSet<String>>>,
+) -> Result<IrModule> {
+    let source = fs::read_to_string(file_path)
+        .with_context(|| format!("Cannot read '{}'", file_path))?;
+    let module_name = Path::new(file_path).file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let program = parse(&source)?;
+    let imports = get_imports(&program);
+
+    let mut main_ir = ast_to_ir::lower(&program, &module_name)
+        .with_context(|| format!("AST→IR lowering failed for {}", file_path))?;
+
+    let mut handles = Vec::new();
+    for imp in imports {
+        let resolved = resolve_import_path(file_path, &imp)?;
+        let mut set = compiled_files.lock().unwrap();
+        if !set.contains(&resolved) {
+            set.insert(resolved.clone());
+            drop(set);
+
+            let compiled_files_clone = Arc::clone(&compiled_files);
+            let handle = thread::spawn(move || {
+                compile_module_transitively(&resolved, compiled_files_clone)
+            });
+            handles.push(handle);
+        }
+    }
+
+    for handle in handles {
+        let imported_ir = handle.join()
+            .map_err(|e| anyhow::anyhow!("Compilation thread panicked: {:?}", e))??;
+        main_ir.merge(imported_ir);
+    }
+
+    Ok(main_ir)
+}
 
 fn parse(source: &str) -> Result<Program> {
     let lexer = Lexer::new(source);
@@ -437,7 +542,7 @@ fn output_path(source_file: &str, output: &str, ext: &str, _platform: &TargetPla
 }
 
 fn print_ir(module: &vajra_core::ir::IrModule) {
-    use vajra_core::ir::*;
+    // use vajra_core::ir::*;
     println!("=== IR Module: {} ===", module.name);
     println!("Globals:");
     for g in &module.globals {

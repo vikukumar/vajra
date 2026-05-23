@@ -360,7 +360,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("C++      | N/A               | N/A                     | N/A");
     }
     println!("\n============================================================");
-    println!("Benchmark Suite 3: Neural Network Node Activations (10,000,000,000 runs)");
+    println!("Benchmark Suite 3: Neural Network Node Activations (100,000,000 runs)");
     println!("============================================================");
     println!("Language | Average Time (ms) | Speedup Factor vs Vajra | Verified Result");
     println!("---------|-------------------|-------------------------|----------------");
@@ -379,7 +379,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
  
     let report_content = format!(
         "# Vajra Performance Benchmark Report\n\n\
-        This document contains high-precision timing results comparing identical Recursive Fibonacci `fib(40)`, Iterative Loop (1,000,000,000 iterations), and Matrix-Free Deep Neural Network Node Activations (10,000,000,000 iterations) implementations across Vajra, Rust, and C++.\n\n\
+        This document contains high-precision timing results comparing identical Recursive Fibonacci `fib(40)`, Iterative Loop (1,000,000,000 iterations), and Matrix-Free Deep Neural Network Node Activations (100,000,000 iterations) implementations across Vajra, Rust, and C++.\n\n\
         ## 📊 Benchmark Suite 1: Recursive Fibonacci (40)\n\n\
         | Language | Average Time (ms) | Speedup Factor (Vajra Speedup) | Verified Output |\n\
         | :--- | :--- | :--- | :--- |\n\
@@ -392,7 +392,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         | **Vajra (LLVM AOT)** | **{:.2} ms** | **1.00x (Baseline)** | **{}** |\n\
         | **Rust** | **{:.2} ms** | **{}** | **{}** |\n\
         | **C++** | **{:.2} ms** | **{}** | **{}** |\n\n\
-        ## 📊 Benchmark Suite 3: Neural Network Node Activations (10,000,000,000 iterations)\n\n\
+        ## 📊 Benchmark Suite 3: Neural Network Node Activations (100,000,000 iterations)\n\n\
         | Language | Average Time (ms) | Speedup Factor (Vajra Speedup) | Verified Output |\n\
         | :--- | :--- | :--- | :--- |\n\
         | **Vajra (LLVM AOT)** | **{:.2} ms** | **1.00x (Baseline)** | **{}** |\n\

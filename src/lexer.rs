@@ -192,6 +192,7 @@ lazy_static! {
         m.insert("सत्य",        TokenKind::True);
         m.insert("असत्य",       TokenKind::False);
         m.insert("लिखो",        TokenKind::Identifier("print".to_string())); // treated as print
+        m.insert("प्रिंट",      TokenKind::Identifier("print".to_string())); // also treated as print
         m.insert("पढ़ो",        TokenKind::Identifier("readline".to_string()));
         m.insert("जारी",        TokenKind::Continue);
         m.insert("निर्गम",      TokenKind::Identifier("exit".to_string()));
@@ -378,6 +379,7 @@ impl<'a> Lexer<'a> {
         self.input.get(self.pos)
     }
 
+    #[allow(dead_code)]
     fn peek_nth(&self, n: usize) -> Option<&&'a str> {
         self.input.get(self.pos + n)
     }

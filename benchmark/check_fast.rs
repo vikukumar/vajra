@@ -1,8 +1,5 @@
-fn main() {
+fn run_nn(layers: i64, nodes: i64) -> i64 {
     let mut sum: i64 = 0;
-    let layers: i64 = 10000;
-    let nodes: i64 = 10000;
-
     let mut l: i64 = 0;
     while l < layers {
         let t1 = l * 17;
@@ -29,5 +26,10 @@ fn main() {
         }
         l += 1;
     }
-    println!("{}", sum);
+    sum
+}
+
+fn main() {
+    println!("10k x 1k: {}", run_nn(10000, 1000));
+    println!("10k x 10k: {}", run_nn(10000, 10000));
 }

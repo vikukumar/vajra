@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use object::write::{Object, StandardSection, Symbol, SymbolSection, Relocation};
 use object::{Architecture, BinaryFormat, Endianness, SymbolKind, SymbolScope, RelocationEncoding, RelocationFlags};
-use anyhow::{bail, Result};
+use anyhow::Result;
 use crate::ir::*;
 
 // ─── Register Definitions ────────────────────────────────────────────────────
@@ -80,6 +80,20 @@ fn emit_store_rbp_offset(code: &mut Vec<u8>, off: i32, reg: Reg) {
     }
 }
 
+fn emit_lea_rbp_offset(code: &mut Vec<u8>, reg: Reg, off: i32) {
+    let rnum = reg.num();
+    let rex = if reg.needs_rex() { 0x4Cu8 } else { 0x48 };
+    code.push(rex);
+    code.push(0x8D);
+    if off >= -128 && off <= 127 {
+        code.push(0x45 | ((rnum & 7) << 3));
+        code.push(off as i8 as u8);
+    } else {
+        code.push(0x85 | ((rnum & 7) << 3));
+        code.extend_from_slice(&off.to_le_bytes());
+    }
+}
+
 fn emit_mov_reg_reg(code: &mut Vec<u8>, dst: Reg, src: Reg) {
     let dnum = dst.num();
     let snum = src.num();
@@ -141,6 +155,7 @@ fn get_arg_regs() -> &'static [Reg] {
 // ─── Value Location ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum ValueLoc {
     Reg(Reg),
     Stack(i32),
@@ -163,6 +178,11 @@ struct FuncGen {
     relocs: Vec<PendingReloc>,
     block_offsets: HashMap<BlockId, usize>,
     pending_branches: Vec<(usize, BlockId)>,
+    alloca_slots: std::collections::HashSet<ValId>,
+    reg_val: HashMap<Reg, ValId>,
+    saved_regs: Vec<(Reg, i32)>,
+    reg_assignment: HashMap<ValId, Reg>,
+    non_spillable: std::collections::HashSet<ValId>,
 }
 
 impl FuncGen {
@@ -174,7 +194,24 @@ impl FuncGen {
             relocs: Vec::new(),
             block_offsets: HashMap::new(),
             pending_branches: Vec::new(),
+            alloca_slots: std::collections::HashSet::new(),
+            reg_val: HashMap::new(),
+            saved_regs: Vec::new(),
+            reg_assignment: HashMap::new(),
+            non_spillable: std::collections::HashSet::new(),
         }
+    }
+    fn set_reg(&mut self, reg: Reg, val_id: ValId) {
+        if reg.is_xmm() { return; }
+        self.reg_val.retain(|&r, &mut v| v != val_id || r.is_xmm());
+        self.reg_val.insert(reg, val_id);
+    }
+    fn invalidate_reg(&mut self, reg: Reg) {
+        if reg.is_xmm() { return; }
+        self.reg_val.remove(&reg);
+    }
+    fn clear_cache(&mut self) {
+        self.reg_val.clear();
     }
     fn alloc_stack(&mut self, _size: i32) -> i32 {
         self.stack_offset -= 8;
@@ -182,6 +219,135 @@ impl FuncGen {
     }
     fn emit(&mut self, bytes: &[u8]) { self.code.extend_from_slice(bytes); }
     fn pos(&self) -> usize { self.code.len() }
+}
+
+fn analyze_and_assign_regs(func: &IrFunction) -> std::collections::HashMap<ValId, Reg> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut allocas = HashSet::new();
+    for block in &func.blocks {
+        for instr in &block.instrs {
+            if let IrInstr::Alloca(dst, _) = instr {
+                allocas.insert(*dst);
+            }
+        }
+    }
+
+    let mut alloca_uses: HashMap<ValId, usize> = HashMap::new();
+    let mut address_taken = HashSet::new();
+
+    for block in &func.blocks {
+        for instr in &block.instrs {
+            match instr {
+                IrInstr::Load(_dst, ptr, _) => {
+                    if allocas.contains(ptr) {
+                        *alloca_uses.entry(*ptr).or_insert(0) += 1;
+                    }
+                }
+                IrInstr::Store(val, ptr) => {
+                    if allocas.contains(ptr) {
+                        *alloca_uses.entry(*ptr).or_insert(0) += 1;
+                    }
+                    if allocas.contains(val) {
+                        address_taken.insert(*val);
+                    }
+                }
+                other => {
+                    let mut referenced = Vec::new();
+                    match other {
+                        IrInstr::ConstI64(dst, _) |
+                        IrInstr::ConstF64(dst, _) |
+                        IrInstr::ConstBool(dst, _) |
+                        IrInstr::StrPtr(dst, _) => { referenced.push(*dst); }
+                        IrInstr::Alloca(dst, _) => { referenced.push(*dst); }
+                        IrInstr::Add(dst, a, b) |
+                        IrInstr::Sub(dst, a, b) |
+                        IrInstr::Mul(dst, a, b) |
+                        IrInstr::Div(dst, a, b) |
+                        IrInstr::Rem(dst, a, b) |
+                        IrInstr::FAdd(dst, a, b) |
+                        IrInstr::FSub(dst, a, b) |
+                        IrInstr::FMul(dst, a, b) |
+                        IrInstr::FDiv(dst, a, b) |
+                        IrInstr::Cmp(dst, _, a, b) |
+                        IrInstr::And(dst, a, b) |
+                        IrInstr::Or(dst, a, b) => {
+                            referenced.push(*dst);
+                            referenced.push(*a);
+                            referenced.push(*b);
+                        }
+                        IrInstr::Neg(dst, a) |
+                        IrInstr::Not(dst, a) |
+                        IrInstr::ItoF(dst, a) |
+                        IrInstr::FtoI(dst, a) |
+                        IrInstr::ZExt(dst, a) |
+                        IrInstr::SExt(dst, a) |
+                        IrInstr::Trunc(dst, a, _) |
+                        IrInstr::BitCast(dst, a, _) => {
+                            referenced.push(*dst);
+                            referenced.push(*a);
+                        }
+                        IrInstr::Gep(dst, ptr, idx) => {
+                            referenced.push(*dst);
+                            referenced.push(*ptr);
+                            referenced.push(*idx);
+                        }
+                        IrInstr::AtomicAdd(ptr, val) => {
+                            referenced.push(*ptr);
+                            referenced.push(*val);
+                        }
+                        IrInstr::Call(dst, _, args) |
+                        IrInstr::CallIndirect(dst, _, args) |
+                        IrInstr::SysCall(dst, _, args) => {
+                            referenced.push(*dst);
+                            referenced.extend(args.iter().copied());
+                        }
+                        IrInstr::Phi(dst, incoming) => {
+                            referenced.push(*dst);
+                            for &(v, _) in incoming {
+                                referenced.push(v);
+                            }
+                        }
+                        IrInstr::Load(_, _, _) | IrInstr::Store(_, _) => {}
+                        IrInstr::Comment(_) => {}
+                    }
+                    for v in referenced {
+                        if allocas.contains(&v) {
+                            address_taken.insert(v);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(term) = &block.terminator {
+            let mut referenced = Vec::new();
+            match term {
+                IrTerminator::Ret(val) => { referenced.push(*val); }
+                IrTerminator::Jump(_) => {}
+                IrTerminator::Branch(cond, _, _) => { referenced.push(*cond); }
+                IrTerminator::Unreachable => {}
+            }
+            for v in referenced {
+                if allocas.contains(&v) {
+                    address_taken.insert(v);
+                }
+            }
+        }
+    }
+
+    let mut candidates: Vec<(ValId, usize)> = alloca_uses.into_iter()
+        .filter(|(val, _)| !address_taken.contains(val))
+        .collect();
+
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Available callee-saved registers: R12, R13, R14, R15, Rbx, Rsi, Rdi
+    let regs = [Reg::R12, Reg::R13, Reg::R14, Reg::R15, Reg::Rbx, Reg::Rsi, Reg::Rdi];
+    let mut assignment = HashMap::new();
+    for (i, (val, _)) in candidates.iter().take(regs.len()).enumerate() {
+        assignment.insert(*val, regs[i]);
+    }
+    assignment
 }
 
 // ─── Codegen ─────────────────────────────────────────────────────────────────
@@ -199,6 +365,19 @@ struct X86_64Codegen<'m> {
 impl<'m> X86_64Codegen<'m> {
     pub fn new(module: &'m IrModule) -> Self {
         Self { module, global_offsets: HashMap::new() }
+    }
+
+    fn load_operands(&self, fg: &mut FuncGen, a: ValId, b: ValId) -> Result<()> {
+        let b_in_rax = fg.reg_val.get(&Reg::Rax) == Some(&b) || 
+            matches!(fg.val_locs.get(&b), Some(ValueLoc::Reg(Reg::Rax)));
+        if b_in_rax {
+            self.load_into(fg, b, Reg::Rcx)?;
+            self.load_into(fg, a, Reg::Rax)?;
+        } else {
+            self.load_into(fg, a, Reg::Rax)?;
+            self.load_into(fg, b, Reg::Rcx)?;
+        }
+        Ok(())
     }
 
     pub fn compile_module(&mut self) -> Result<Vec<u8>> {
@@ -259,18 +438,29 @@ impl<'m> X86_64Codegen<'m> {
             }
         }
 
-        for func in &self.module.functions {
-            if func.is_extern { continue; }
+        let self_ref = &*self;
+        let functions: Vec<_> = self.module.functions.iter().filter(|f| !f.is_extern).collect();
+        let compiled_funcs: Vec<(String, Result<FuncGen>, bool)> = std::thread::scope(|s| {
+            let mut handles = Vec::new();
+            for func in &functions {
+                let func_ref = *func;
+                handles.push(s.spawn(move || {
+                    (func_ref.name.clone(), self_ref.compile_function(func_ref), func_ref.is_main)
+                }));
+            }
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
 
-            let func_code = self.compile_function(func)?;
+        for (name, func_code_res, is_main) in compiled_funcs {
+            let func_code = func_code_res?;
             let func_offset = obj.append_section_data(text_section, &func_code.code, 16);
 
             let func_sym_id = obj.add_symbol(Symbol {
-                name: func.name.as_bytes().to_vec(),
+                name: name.as_bytes().to_vec(),
                 value: func_offset,
                 size: func_code.code.len() as u64,
                 kind: SymbolKind::Text,
-                scope: if func.is_main { SymbolScope::Dynamic } else { SymbolScope::Compilation },
+                scope: if is_main { SymbolScope::Dynamic } else { SymbolScope::Compilation },
                 weak: false,
                 section: SymbolSection::Section(text_section),
                 flags: object::SymbolFlags::None,
@@ -313,11 +503,46 @@ impl<'m> X86_64Codegen<'m> {
     fn compile_function(&self, func: &IrFunction) -> Result<FuncGen> {
         let mut fg = FuncGen::new();
 
+        let use_counts = get_use_counts(func);
+        let mut non_spillable = std::collections::HashSet::new();
+        for block in &func.blocks {
+            let mut i = 0;
+            while i < block.instrs.len() {
+                let instr = &block.instrs[i];
+                if let Some(dst) = get_instr_dst(instr) {
+                    let mut next_idx = i + 1;
+                    while next_idx < block.instrs.len() {
+                        let next_instr = &block.instrs[next_idx];
+                        if !matches!(next_instr, IrInstr::Alloca(_, _) | IrInstr::Comment(_)) {
+                            if is_user_of(next_instr, dst) && use_counts.get(&dst).cloned().unwrap_or(0) == 1 {
+                                non_spillable.insert(dst);
+                            }
+                            break;
+                        }
+                        next_idx += 1;
+                    }
+                }
+                i += 1;
+            }
+        }
+        fg.non_spillable = non_spillable;
+
         // Prologue: push rbp; mov rbp,rsp
         fg.emit(&[0x55, 0x48, 0x89, 0xE5]);
         // sub rsp, frame_size (placeholder — patched later)
         let frame_patch = fg.pos();
         fg.emit(&[0x48, 0x81, 0xEC, 0x00, 0x00, 0x00, 0x00]);
+
+        // Analyze and assign registers for alloca slots
+        let reg_assignment = analyze_and_assign_regs(func);
+        fg.reg_assignment = reg_assignment.clone();
+
+        // Save callee-saved registers that we will use
+        for &reg in reg_assignment.values() {
+            let slot = fg.alloc_stack(8);
+            emit_store_rbp_offset(&mut fg.code, slot, reg);
+            fg.saved_regs.push((reg, slot));
+        }
 
         // Map parameters to argument registers
         let arg_regs = get_arg_regs();
@@ -326,14 +551,13 @@ impl<'m> X86_64Codegen<'m> {
                 let off = fg.alloc_stack(8);
                 emit_store_rbp_offset(&mut fg.code, off, arg_regs[i]);
                 fg.val_locs.insert(param.val, ValueLoc::Stack(off));
+                fg.set_reg(arg_regs[i], param.val);
             }
         }
 
-        // vajra_runtime_init is called via the IR (ast_to_ir inserts it as a Call instruction)
-        // Do NOT emit it here — it would duplicate the call and corrupt the call sequence.
-
         // Compile blocks
         for block in &func.blocks {
+            fg.clear_cache();
             let block_pos = fg.pos();
             fg.block_offsets.insert(block.id, block_pos);
 
@@ -365,13 +589,11 @@ impl<'m> X86_64Codegen<'m> {
 
         // Patch frame size — must be aligned so RSP is 16-byte aligned at CALL sites.
         // After `push rbp` (-8 bytes) + `sub rsp, frame`, the stack offset from original is -(8 + frame).
-        // At each CALL, RSP must be 16-aligned (CALL pushes 8 more bytes making it the expected 16n).
-        // So we need (8 + frame) % 16 == 0, i.e., frame ≡ 8 (mod 16).
+        // At each CALL, RSP must be 16-aligned.
+        // Since `push rbp` pushes 8 bytes, RSP at entry was `16n + 8`. After `push rbp` it becomes `16n`.
+        // So `frame` must be a multiple of 16 (i.e., frame ≡ 0 (mod 16)) to keep RSP 16-aligned.
         let raw = (-fg.stack_offset).max(32) as u32;
-        let base = align16(raw); // round up to multiple of 16
-        // If base % 16 == 0 → frame = base + 8 to satisfy (8+frame) % 16 == 0
-        // If base % 16 == 8 → frame = base (already satisfies)
-        let frame = if base % 16 == 8 { base } else { base + 8 };
+        let frame = align16(raw); // round up to multiple of 16
         fg.code[frame_patch+3..frame_patch+7].copy_from_slice(&frame.to_le_bytes());
 
         Ok(fg)
@@ -384,65 +606,224 @@ impl<'m> X86_64Codegen<'m> {
             IrInstr::ConstBool(dst, val) => { fg.val_locs.insert(*dst, ValueLoc::Imm(if *val { 1 } else { 0 })); }
             IrInstr::StrPtr(dst, name) => { fg.val_locs.insert(*dst, ValueLoc::Global(name.clone())); }
             IrInstr::Alloca(dst, _) => {
-                let off = fg.alloc_stack(8);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.alloca_slots.insert(*dst);
+                if let Some(&reg) = fg.reg_assignment.get(dst) {
+                    fg.val_locs.insert(*dst, ValueLoc::Reg(reg));
+                } else {
+                    let off = fg.alloc_stack(8);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                }
             }
             IrInstr::Store(val_id, ptr_id) => {
-                self.load_into(fg, *val_id, Reg::Rax)?;
-                let ptr_loc = fg.val_locs.get(ptr_id).cloned()
-                    .ok_or_else(|| anyhow::anyhow!("store: unknown ptr {}", ptr_id))?;
-                if let ValueLoc::Stack(off) = ptr_loc {
-                    emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                }
-            }
-            IrInstr::Load(dst, ptr_id, _) => {
-                let ptr_loc = fg.val_locs.get(ptr_id).cloned()
-                    .ok_or_else(|| anyhow::anyhow!("load: unknown ptr {}", ptr_id))?;
-                match ptr_loc {
-                    ValueLoc::Stack(ptr_off) => {
-                        emit_load_rbp_offset(&mut fg.code, Reg::Rax, ptr_off);
-                        fg.code.extend_from_slice(&[0x48, 0x8B, 0x00]); // mov rax, [rax]
+                if fg.alloca_slots.contains(ptr_id) {
+                    let ptr_loc = fg.val_locs.get(ptr_id).cloned()
+                        .ok_or_else(|| anyhow::anyhow!("store: unknown ptr {}", ptr_id))?;
+                    match ptr_loc {
+                        ValueLoc::Stack(off) => {
+                            self.load_into(fg, *val_id, Reg::Rax)?;
+                            emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                        }
+                        ValueLoc::Reg(reg) => {
+                            self.load_into(fg, *val_id, reg)?;
+                        }
+                        _ => {}
                     }
-                    ValueLoc::Imm(v) => { emit_mov_imm64(&mut fg.code, Reg::Rax, v); }
-                    _ => {}
+                } else {
+                    self.load_operands(fg, *val_id, *ptr_id)?;
+                    fg.code.extend_from_slice(&[0x48, 0x89, 0x01]); // mov [rcx], rax
                 }
-                let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
             }
+
+            IrInstr::Load(dst, ptr_id, _) => {
+                if fg.alloca_slots.contains(ptr_id) {
+                    let ptr_loc = fg.val_locs.get(ptr_id).cloned()
+                        .ok_or_else(|| anyhow::anyhow!("load: unknown ptr {}", ptr_id))?;
+                    match ptr_loc {
+                        ValueLoc::Stack(ptr_off) => {
+                            fg.val_locs.insert(*dst, ValueLoc::Stack(ptr_off));
+                        }
+                        ValueLoc::Reg(reg) => {
+                            fg.val_locs.insert(*dst, ValueLoc::Reg(reg));
+                        }
+                        _ => {}
+                    }
+                } else {
+                    self.load_into(fg, *ptr_id, Reg::Rax)?;
+                    fg.code.extend_from_slice(&[0x48, 0x8B, 0x00]); // mov rax, [rax]
+                    fg.invalidate_reg(Reg::Rax);
+                    let off = fg.alloc_stack(8);
+                    emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                    fg.set_reg(Reg::Rax, *dst);
+                }
+            }
+
             IrInstr::Add(dst, a, b) => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x01, 0xC8])?; }
             IrInstr::Sub(dst, a, b) => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x29, 0xC8])?; }
             IrInstr::Mul(dst, a, b) => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x0F, 0xAF, 0xC1])?; }
             IrInstr::Div(dst, a, b) => {
-                self.load_into(fg, *a, Reg::Rax)?;
-                self.load_into(fg, *b, Reg::Rcx)?;
-                fg.code.extend_from_slice(&[0x48, 0x99, 0x48, 0xF7, 0xF9]); // cqo; idiv rcx
-                let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                let is_const_10 = match fg.val_locs.get(b) {
+                    Some(ValueLoc::Imm(10)) => true,
+                    _ => false,
+                };
+                let is_const_5 = match fg.val_locs.get(b) {
+                    Some(ValueLoc::Imm(5)) => true,
+                    _ => false,
+                };
+
+                if is_const_10 {
+                    self.load_into(fg, *a, Reg::Rax)?;
+                    emit_mov_reg_reg(&mut fg.code, Reg::R10, Reg::Rax);
+                    emit_mov_imm64(&mut fg.code, Reg::Rcx, 0x6666666666666667);
+                    fg.emit(&[0x48, 0xF7, 0xE9]); // imul rcx
+                    fg.emit(&[0x48, 0xC1, 0xFA, 0x02]); // sar rdx, 2
+                    fg.emit(&[0x49, 0xC1, 0xEA, 0x3F]); // shr r10, 63
+                    fg.emit(&[0x4C, 0x01, 0xD2]); // add rdx, r10
+                    emit_mov_reg_reg(&mut fg.code, Reg::Rax, Reg::Rdx);
+                    
+                    fg.invalidate_reg(Reg::Rax);
+                    fg.invalidate_reg(Reg::Rdx);
+                    fg.invalidate_reg(Reg::R10);
+                    
+                    if fg.non_spillable.contains(dst) {
+                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
+                    } else {
+                        let off = fg.alloc_stack(8);
+                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                    }
+                    fg.set_reg(Reg::Rax, *dst);
+                } else if is_const_5 {
+                    self.load_into(fg, *a, Reg::Rax)?;
+                    emit_mov_reg_reg(&mut fg.code, Reg::R10, Reg::Rax);
+                    emit_mov_imm64(&mut fg.code, Reg::Rcx, 0x6666666666666667);
+                    fg.emit(&[0x48, 0xF7, 0xE9]); // imul rcx
+                    fg.emit(&[0x48, 0xC1, 0xFA, 0x01]); // sar rdx, 1
+                    fg.emit(&[0x49, 0xC1, 0xEA, 0x3F]); // shr r10, 63
+                    fg.emit(&[0x4C, 0x01, 0xD2]); // add rdx, r10
+                    emit_mov_reg_reg(&mut fg.code, Reg::Rax, Reg::Rdx);
+                    
+                    fg.invalidate_reg(Reg::Rax);
+                    fg.invalidate_reg(Reg::Rdx);
+                    fg.invalidate_reg(Reg::R10);
+                    
+                    if fg.non_spillable.contains(dst) {
+                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
+                    } else {
+                        let off = fg.alloc_stack(8);
+                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                    }
+                    fg.set_reg(Reg::Rax, *dst);
+                } else {
+                    self.load_operands(fg, *a, *b)?;
+                    fg.invalidate_reg(Reg::Rax);
+                    fg.invalidate_reg(Reg::Rdx);
+                    fg.code.extend_from_slice(&[0x48, 0x99, 0x48, 0xF7, 0xF9]); // cqo; idiv rcx
+                    if fg.non_spillable.contains(dst) {
+                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
+                    } else {
+                        let off = fg.alloc_stack(8);
+                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                    }
+                    fg.set_reg(Reg::Rax, *dst);
+                }
             }
             IrInstr::Rem(dst, a, b) => {
-                self.load_into(fg, *a, Reg::Rax)?;
-                self.load_into(fg, *b, Reg::Rcx)?;
-                fg.code.extend_from_slice(&[0x48, 0x99, 0x48, 0xF7, 0xF9]); // cqo; idiv rcx
-                let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rdx); // remainder in rdx
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                let is_const_10 = match fg.val_locs.get(b) {
+                    Some(ValueLoc::Imm(10)) => true,
+                    _ => false,
+                };
+                let is_const_5 = match fg.val_locs.get(b) {
+                    Some(ValueLoc::Imm(5)) => true,
+                    _ => false,
+                };
+
+                if is_const_10 {
+                    self.load_into(fg, *a, Reg::Rax)?;
+                    emit_mov_reg_reg(&mut fg.code, Reg::R10, Reg::Rax);
+                    emit_mov_imm64(&mut fg.code, Reg::Rcx, 0x6666666666666667);
+                    fg.emit(&[0x48, 0xF7, 0xE9]); // imul rcx
+                    fg.emit(&[0x48, 0xC1, 0xFA, 0x02]); // sar rdx, 2
+                    fg.emit(&[0x49, 0xC1, 0xEA, 0x3F]); // shr r10, 63
+                    fg.emit(&[0x4C, 0x01, 0xD2]); // add rdx, r10 (quotient in rdx)
+                    
+                    fg.emit(&[0x48, 0x6B, 0xD2, 0x0A]); // imul rdx, rdx, 10
+                    fg.emit(&[0x49, 0x29, 0xD2]); // sub r10, rdx
+                    emit_mov_reg_reg(&mut fg.code, Reg::Rdx, Reg::R10); // remainder in rdx
+                    
+                    fg.invalidate_reg(Reg::Rax);
+                    fg.invalidate_reg(Reg::Rdx);
+                    fg.invalidate_reg(Reg::R10);
+                    
+                    if fg.non_spillable.contains(dst) {
+                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rdx));
+                    } else {
+                        let off = fg.alloc_stack(8);
+                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rdx);
+                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                    }
+                    fg.set_reg(Reg::Rdx, *dst);
+                } else if is_const_5 {
+                    self.load_into(fg, *a, Reg::Rax)?;
+                    emit_mov_reg_reg(&mut fg.code, Reg::R10, Reg::Rax);
+                    emit_mov_imm64(&mut fg.code, Reg::Rcx, 0x6666666666666667);
+                    fg.emit(&[0x48, 0xF7, 0xE9]); // imul rcx
+                    fg.emit(&[0x48, 0xC1, 0xFA, 0x01]); // sar rdx, 1
+                    fg.emit(&[0x49, 0xC1, 0xEA, 0x3F]); // shr r10, 63
+                    fg.emit(&[0x4C, 0x01, 0xD2]); // add rdx, r10 (quotient in rdx)
+                    
+                    fg.emit(&[0x48, 0x6B, 0xD2, 0x05]); // imul rdx, rdx, 5
+                    fg.emit(&[0x49, 0x29, 0xD2]); // sub r10, rdx
+                    emit_mov_reg_reg(&mut fg.code, Reg::Rdx, Reg::R10); // remainder in rdx
+                    
+                    fg.invalidate_reg(Reg::Rax);
+                    fg.invalidate_reg(Reg::Rdx);
+                    fg.invalidate_reg(Reg::R10);
+                    
+                    if fg.non_spillable.contains(dst) {
+                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rdx));
+                    } else {
+                        let off = fg.alloc_stack(8);
+                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rdx);
+                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                    }
+                    fg.set_reg(Reg::Rdx, *dst);
+                } else {
+                    self.load_operands(fg, *a, *b)?;
+                    fg.invalidate_reg(Reg::Rax);
+                    fg.invalidate_reg(Reg::Rdx);
+                    fg.code.extend_from_slice(&[0x48, 0x99, 0x48, 0xF7, 0xF9]); // cqo; idiv rcx
+                    if fg.non_spillable.contains(dst) {
+                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rdx));
+                    } else {
+                        let off = fg.alloc_stack(8);
+                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rdx);
+                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                    }
+                    fg.set_reg(Reg::Rdx, *dst);
+                }
             }
             IrInstr::Neg(dst, a) => {
                 self.load_into(fg, *a, Reg::Rax)?;
                 fg.code.extend_from_slice(&[0x48, 0xF7, 0xD8]); // neg rax
-                let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.invalidate_reg(Reg::Rax);
+                if fg.non_spillable.contains(dst) {
+                    fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
+                } else {
+                    let off = fg.alloc_stack(8);
+                    emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                }
+                fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::FAdd(dst, a, b) => { self.fop(fg, *dst, *a, *b, &[0xF2, 0x0F, 0x58, 0xC1])?; }
             IrInstr::FSub(dst, a, b) => { self.fop(fg, *dst, *a, *b, &[0xF2, 0x0F, 0x5C, 0xC1])?; }
             IrInstr::FMul(dst, a, b) => { self.fop(fg, *dst, *a, *b, &[0xF2, 0x0F, 0x59, 0xC1])?; }
             IrInstr::FDiv(dst, a, b) => { self.fop(fg, *dst, *a, *b, &[0xF2, 0x0F, 0x5E, 0xC1])?; }
             IrInstr::Cmp(dst, op, a, b) => {
-                self.load_into(fg, *a, Reg::Rax)?;
-                self.load_into(fg, *b, Reg::Rcx)?;
+                self.load_operands(fg, *a, *b)?;
                 fg.code.extend_from_slice(&[0x48, 0x39, 0xC8]); // cmp rax, rcx
                 let setcc: u8 = match op {
                     CmpOp::Eq => 0x94, CmpOp::Ne => 0x95,
@@ -451,18 +832,30 @@ impl<'m> X86_64Codegen<'m> {
                 };
                 fg.code.extend_from_slice(&[0x0F, setcc, 0xC0]); // setCC al
                 fg.code.extend_from_slice(&[0x48, 0x0F, 0xB6, 0xC0]); // movzx rax, al
-                let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.invalidate_reg(Reg::Rax);
+                if fg.non_spillable.contains(dst) {
+                    fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
+                } else {
+                    let off = fg.alloc_stack(8);
+                    emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                }
+                fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::And(dst, a, b) => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x21, 0xC8])?; }
             IrInstr::Or(dst, a, b)  => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x09, 0xC8])?; }
             IrInstr::Not(dst, a) => {
                 self.load_into(fg, *a, Reg::Rax)?;
                 fg.code.extend_from_slice(&[0x48, 0x85, 0xC0, 0x0F, 0x94, 0xC0, 0x48, 0x0F, 0xB6, 0xC0]); // test rax,rax; sete al; movzx rax,al
-                let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.invalidate_reg(Reg::Rax);
+                if fg.non_spillable.contains(dst) {
+                    fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
+                } else {
+                    let off = fg.alloc_stack(8);
+                    emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                }
+                fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::Call(dst, name, args) => {
                 let arg_regs = get_arg_regs();
@@ -471,6 +864,7 @@ impl<'m> X86_64Codegen<'m> {
                         self.load_into(fg, arg_id, arg_regs[i])?;
                     }
                 }
+                fg.clear_cache();
                 #[cfg(target_os = "windows")]
                 fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32 (shadow space)
                 fg.code.push(0xE8);
@@ -482,12 +876,19 @@ impl<'m> X86_64Codegen<'m> {
                 let off = fg.alloc_stack(8);
                 emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
                 fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::ZExt(dst, src) | IrInstr::SExt(dst, src) | IrInstr::Trunc(dst, src, _) | IrInstr::BitCast(dst, src, _) => {
                 self.load_into(fg, *src, Reg::Rax)?;
-                let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.invalidate_reg(Reg::Rax);
+                if fg.non_spillable.contains(dst) {
+                    fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
+                } else {
+                    let off = fg.alloc_stack(8);
+                    emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                }
+                fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::ItoF(dst, src) => {
                 self.load_into(fg, *src, Reg::Rax)?;
@@ -499,21 +900,32 @@ impl<'m> X86_64Codegen<'m> {
             IrInstr::FtoI(dst, src) => {
                 self.load_f64_into(fg, *src, Reg::Xmm0)?;
                 fg.code.extend_from_slice(&[0xF2, 0x48, 0x0F, 0x2C, 0xC0]); // cvttsd2si rax, xmm0
-                let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.invalidate_reg(Reg::Rax);
+                if fg.non_spillable.contains(dst) {
+                    fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
+                } else {
+                    let off = fg.alloc_stack(8);
+                    emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                }
+                fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::Gep(dst, ptr, idx) => {
-                self.load_into(fg, *ptr, Reg::Rax)?;
-                self.load_into(fg, *idx, Reg::Rcx)?;
+                self.load_operands(fg, *ptr, *idx)?;
                 fg.code.extend_from_slice(&[0x48, 0x8D, 0x04, 0xC8]); // lea rax, [rax+rcx*8]
-                let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.invalidate_reg(Reg::Rax);
+                if fg.non_spillable.contains(dst) {
+                    fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
+                } else {
+                    let off = fg.alloc_stack(8);
+                    emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                }
+                fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::AtomicAdd(ptr, val) => {
-                self.load_into(fg, *ptr, Reg::Rax)?;
-                self.load_into(fg, *val, Reg::Rcx)?;
+                self.load_operands(fg, *ptr, *val)?;
+                fg.invalidate_reg(Reg::Rcx);
                 fg.code.extend_from_slice(&[0xF0, 0x48, 0x0F, 0xC1, 0x08]); // lock xadd [rax], rcx
             }
             IrInstr::Phi(dst, _) => {
@@ -528,10 +940,12 @@ impl<'m> X86_64Codegen<'m> {
                         self.load_into(fg, arg, syscall_arg_regs[i])?;
                     }
                 }
+                fg.clear_cache();
                 fg.code.extend_from_slice(&[0x0F, 0x05]); // syscall
                 let off = fg.alloc_stack(8);
                 emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
                 fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::CallIndirect(dst, func_ptr, args) => {
                 let arg_regs = get_arg_regs();
@@ -539,23 +953,31 @@ impl<'m> X86_64Codegen<'m> {
                     if i < arg_regs.len() { self.load_into(fg, arg, arg_regs[i])?; }
                 }
                 self.load_into(fg, *func_ptr, Reg::Rax)?;
+                fg.clear_cache();
                 fg.code.extend_from_slice(&[0xFF, 0xD0]); // call rax
                 let off = fg.alloc_stack(8);
                 emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
                 fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                fg.set_reg(Reg::Rax, *dst);
             }
+
             IrInstr::Comment(_) => {}
         }
         Ok(())
     }
 
     fn arith_op(&self, fg: &mut FuncGen, dst: ValId, a: ValId, b: ValId, op_bytes: &[u8]) -> Result<()> {
-        self.load_into(fg, a, Reg::Rax)?;
-        self.load_into(fg, b, Reg::Rcx)?;
+        self.load_operands(fg, a, b)?;
         fg.emit(op_bytes);
-        let off = fg.alloc_stack(8);
-        emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-        fg.val_locs.insert(dst, ValueLoc::Stack(off));
+        if fg.non_spillable.contains(&dst) {
+            fg.val_locs.insert(dst, ValueLoc::Reg(Reg::Rax));
+        } else {
+            let off = fg.alloc_stack(8);
+            emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+            fg.val_locs.insert(dst, ValueLoc::Stack(off));
+        }
+        fg.invalidate_reg(Reg::Rax);
+        fg.set_reg(Reg::Rax, dst);
         Ok(())
     }
 
@@ -573,6 +995,9 @@ impl<'m> X86_64Codegen<'m> {
         match term {
             IrTerminator::Ret(val) => {
                 self.load_into(fg, *val, Reg::Rax)?;
+                for &(reg, slot) in fg.saved_regs.iter().rev() {
+                    emit_load_rbp_offset(&mut fg.code, reg, slot);
+                }
                 fg.code.extend_from_slice(&[0xC9, 0xC3]); // leave; ret
             }
             IrTerminator::Jump(target) => {
@@ -607,13 +1032,77 @@ impl<'m> X86_64Codegen<'m> {
     }
 
     fn load_into(&self, fg: &mut FuncGen, val_id: ValId, reg: Reg) -> Result<()> {
+        if reg.is_xmm() {
+            let loc = fg.val_locs.get(&val_id).cloned()
+                .ok_or_else(|| anyhow::anyhow!("Unknown val {}", val_id))?;
+            match loc {
+                ValueLoc::Imm(bits) => {
+                    emit_mov_imm64(&mut fg.code, Reg::Rax, bits);
+                    fg.code.extend_from_slice(&[0x66, 0x48, 0x0F, 0x6E, 0xC0 | (reg.num() << 3)]);
+                }
+                ValueLoc::Stack(off) => emit_movsd_xmm_from_mem(&mut fg.code, reg, off),
+                _ => {
+                    self.load_into(fg, val_id, Reg::Rax)?;
+                    fg.code.extend_from_slice(&[0x66, 0x48, 0x0F, 0x6E, 0xC0 | (reg.num() << 3)]);
+                }
+            }
+            return Ok(());
+        }
+
+        // 1. Check if the value is already in the target register
+        if fg.reg_val.get(&reg) == Some(&val_id) {
+            return Ok(());
+        }
+
+        // 2. Check if the value is in another register
+        let mut found_reg = None;
+        for (&r, &v) in &fg.reg_val {
+            if v == val_id && r != reg {
+                found_reg = Some(r);
+                break;
+            }
+        }
+
+        if let Some(src_reg) = found_reg {
+            emit_mov_reg_reg(&mut fg.code, reg, src_reg);
+            fg.set_reg(reg, val_id);
+            return Ok(());
+        }
+
+        // 3. Otherwise, load from its primary location
+        if fg.alloca_slots.contains(&val_id) {
+            let loc = fg.val_locs.get(&val_id).cloned()
+                .ok_or_else(|| anyhow::anyhow!("Unknown val {}", val_id))?;
+            match loc {
+                ValueLoc::Stack(off) => {
+                    emit_lea_rbp_offset(&mut fg.code, reg, off);
+                    fg.set_reg(reg, val_id);
+                    return Ok(());
+                }
+                ValueLoc::Reg(src) => {
+                    if src != reg {
+                        emit_mov_reg_reg(&mut fg.code, reg, src);
+                    }
+                    fg.set_reg(reg, val_id);
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         let loc = fg.val_locs.get(&val_id).cloned()
             .ok_or_else(|| anyhow::anyhow!("Unknown val {}", val_id))?;
         match loc {
-            ValueLoc::Imm(v) => emit_mov_imm64(&mut fg.code, reg, v),
-            ValueLoc::Stack(off) => emit_load_rbp_offset(&mut fg.code, reg, off),
+            ValueLoc::Imm(v) => {
+                emit_mov_imm64(&mut fg.code, reg, v);
+            }
+            ValueLoc::Stack(off) => {
+                emit_load_rbp_offset(&mut fg.code, reg, off);
+            }
             ValueLoc::Reg(src) => {
-                if src != reg { emit_mov_reg_reg(&mut fg.code, reg, src); }
+                if src != reg {
+                    emit_mov_reg_reg(&mut fg.code, reg, src);
+                }
             }
             ValueLoc::Global(name) => {
                 emit_lea_rip_rel(&mut fg.code, reg);
@@ -622,6 +1111,8 @@ impl<'m> X86_64Codegen<'m> {
                 fg.relocs.push(PendingReloc { offset: patch as u64, symbol: name, addend: -4 });
             }
         }
+
+        fg.set_reg(reg, val_id);
         Ok(())
     }
 
@@ -638,4 +1129,115 @@ impl<'m> X86_64Codegen<'m> {
         }
         Ok(())
     }
+}
+
+fn get_instr_dst(instr: &IrInstr) -> Option<ValId> {
+    match instr {
+        IrInstr::Add(dst, _, _) |
+        IrInstr::Sub(dst, _, _) |
+        IrInstr::Mul(dst, _, _) |
+        IrInstr::Div(dst, _, _) |
+        IrInstr::Rem(dst, _, _) |
+        IrInstr::Neg(dst, _) |
+        IrInstr::FAdd(dst, _, _) |
+        IrInstr::FSub(dst, _, _) |
+        IrInstr::FMul(dst, _, _) |
+        IrInstr::FDiv(dst, _, _) |
+        IrInstr::Cmp(dst, _, _, _) |
+        IrInstr::And(dst, _, _) |
+        IrInstr::Or(dst, _, _) |
+        IrInstr::Not(dst, _) |
+        IrInstr::ZExt(dst, _) |
+        IrInstr::SExt(dst, _) |
+        IrInstr::Trunc(dst, _, _) |
+        IrInstr::BitCast(dst, _, _) |
+        IrInstr::ItoF(dst, _) |
+        IrInstr::FtoI(dst, _) |
+        IrInstr::Gep(dst, _, _) => Some(*dst),
+        _ => None,
+    }
+}
+
+fn is_user_of(instr: &IrInstr, val: ValId) -> bool {
+    match instr {
+        IrInstr::Store(v, _) => *v == val,
+        IrInstr::Add(_, a, b) |
+        IrInstr::Sub(_, a, b) |
+        IrInstr::Mul(_, a, b) |
+        IrInstr::Div(_, a, b) |
+        IrInstr::Rem(_, a, b) |
+        IrInstr::FAdd(_, a, b) |
+        IrInstr::FSub(_, a, b) |
+        IrInstr::FMul(_, a, b) |
+        IrInstr::FDiv(_, a, b) |
+        IrInstr::Cmp(_, _, a, b) |
+        IrInstr::And(_, a, b) |
+        IrInstr::Or(_, a, b) => *a == val || *b == val,
+        IrInstr::Neg(_, a) |
+        IrInstr::Not(_, a) |
+        IrInstr::ZExt(_, a) |
+        IrInstr::SExt(_, a) |
+        IrInstr::Trunc(_, a, _) |
+        IrInstr::BitCast(_, a, _) |
+        IrInstr::ItoF(_, a) |
+        IrInstr::FtoI(_, a) => *a == val,
+        IrInstr::Gep(_, ptr, idx) => *ptr == val || *idx == val,
+        IrInstr::AtomicAdd(ptr, v) => *ptr == val || *v == val,
+        _ => false,
+    }
+}
+
+fn get_use_counts(func: &IrFunction) -> std::collections::HashMap<ValId, usize> {
+    let mut counts = std::collections::HashMap::new();
+    for block in &func.blocks {
+        for instr in &block.instrs {
+            let mut refs = Vec::new();
+            match instr {
+                IrInstr::Store(v, p) => { refs.push(*v); refs.push(*p); }
+                IrInstr::Load(_, p, _) => { refs.push(*p); }
+                IrInstr::Add(_, a, b) |
+                IrInstr::Sub(_, a, b) |
+                IrInstr::Mul(_, a, b) |
+                IrInstr::Div(_, a, b) |
+                IrInstr::Rem(_, a, b) |
+                IrInstr::FAdd(_, a, b) |
+                IrInstr::FSub(_, a, b) |
+                IrInstr::FMul(_, a, b) |
+                IrInstr::FDiv(_, a, b) |
+                IrInstr::Cmp(_, _, a, b) |
+                IrInstr::And(_, a, b) |
+                IrInstr::Or(_, a, b) => { refs.push(*a); refs.push(*b); }
+                IrInstr::Neg(_, a) |
+                IrInstr::Not(_, a) |
+                IrInstr::ZExt(_, a) |
+                IrInstr::SExt(_, a) |
+                IrInstr::Trunc(_, a, _) |
+                IrInstr::BitCast(_, a, _) |
+                IrInstr::ItoF(_, a) |
+                IrInstr::FtoI(_, a) => { refs.push(*a); }
+                IrInstr::Gep(_, ptr, idx) => { refs.push(*ptr); refs.push(*idx); }
+                IrInstr::AtomicAdd(ptr, val) => { refs.push(*ptr); refs.push(*val); }
+                IrInstr::Call(_, _, args) |
+                IrInstr::CallIndirect(_, _, args) |
+                IrInstr::SysCall(_, _, args) => { refs.extend(args.iter().copied()); }
+                IrInstr::Phi(_, incoming) => {
+                    for &(v, _) in incoming {
+                        refs.push(v);
+                    }
+                }
+                _ => {}
+            }
+            for r in refs {
+                *counts.entry(r).or_insert(0) += 1;
+            }
+        }
+        if let Some(term) = &block.terminator {
+            match term {
+                IrTerminator::Ret(val) => { *counts.entry(*val).or_insert(0) += 1; }
+                IrTerminator::Branch(cond, _, _) => { *counts.entry(*cond).or_insert(0) += 1; }
+                _ => {}
+            }
+        }
+    }
+    counts
 }

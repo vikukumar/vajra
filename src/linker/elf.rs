@@ -5,8 +5,10 @@
 use anyhow::Result;
 
 const PT_LOAD: u32 = 1;
+#[allow(dead_code)]
 const PT_NULL: u32 = 0;
 const PF_X: u32 = 0x1;
+#[allow(dead_code)]
 const PF_W: u32 = 0x2;
 const PF_R: u32 = 0x4;
 

@@ -306,19 +306,35 @@ impl<'a> Parser<'a> {
         Some(Statement::Let { name, value, ty })
     }
 
-    fn parse_expression(&mut self, _precedence: i32) -> Expression {
+    fn get_precedence(kind: &TokenKind) -> i32 {
+        match kind {
+            TokenKind::Dot | TokenKind::LParen | TokenKind::LBracket => 90,
+            TokenKind::Star | TokenKind::Slash | TokenKind::Percent => 40,
+            TokenKind::Plus | TokenKind::Minus => 35,
+            TokenKind::LessThan | TokenKind::GreaterThan | TokenKind::LessEqual | TokenKind::GreaterEqual => 30,
+            TokenKind::Equal | TokenKind::NotEqual => 25,
+            TokenKind::Ampersand => 20,
+            TokenKind::Caret => 18,
+            TokenKind::Pipe => 16,
+            TokenKind::AndAnd => 10,
+            TokenKind::OrOr => 5,
+            _ => 0,
+        }
+    }
+
+    fn parse_expression(&mut self, precedence: i32) -> Expression {
         self.skip_newlines();
 
         let mut left = self.parse_primary();
 
-        // Postfix/infix operators
         loop {
-            match &self.cur_token.kind {
-                TokenKind::Newline | TokenKind::Semicolon | TokenKind::EOF
-                | TokenKind::RBrace | TokenKind::RParen | TokenKind::RBracket => break,
+            let next_prec = Self::get_precedence(&self.cur_token.kind);
+            if next_prec <= precedence {
+                break;
+            }
 
+            match &self.cur_token.kind {
                 TokenKind::LParen => {
-                    // Function call
                     self.next_token();
                     let mut args = Vec::new();
                     while self.cur_token.kind != TokenKind::RParen && self.cur_token.kind != TokenKind::EOF {
@@ -336,7 +352,6 @@ impl<'a> Parser<'a> {
                             }
                         }
                         Expression::PropertyAccess { object, property } => {
-                            // obj.method(args)
                             let is_print_call = match &*object {
                                 Expression::Identifier(n) => {
                                     (n == "console" && property == "log")
@@ -356,14 +371,12 @@ impl<'a> Parser<'a> {
                             }
                         }
                         _other => {
-                            // Calling result of expression (e.g., factory()()) — treat as intrinsic void
                             Expression::FunctionCall { name: "__call__".into(), args }
-                        },
+                        }
                     };
                 }
 
                 TokenKind::LBracket => {
-                    // Index operation: expr[idx]
                     self.next_token();
                     let idx = self.parse_expression(0);
                     if self.cur_token.kind == TokenKind::RBracket { self.next_token(); }
@@ -397,7 +410,7 @@ impl<'a> Parser<'a> {
                         _ => unreachable!(),
                     }.to_string();
                     self.next_token();
-                    let right = self.parse_primary();
+                    let right = self.parse_expression(next_prec);
                     left = Expression::BinaryOp { left: Box::new(left), op, right: Box::new(right) };
                 }
 
