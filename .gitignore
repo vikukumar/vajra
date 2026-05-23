@@ -37,3 +37,5 @@ _temp_*
 /benchmark/fib_cpp.obj
 
 test_*
+
+!runtime_win.o
