@@ -454,6 +454,11 @@ impl<'a> Parser<'a> {
                 self.next_token();
                 Expression::Literal(Literal::Integer(v))
             }
+            TokenKind::BigInt(s) => {
+                let v = s.clone();
+                self.next_token();
+                Expression::Literal(Literal::BigInt(v))
+            }
             TokenKind::Float(f) => {
                 let v = *f;
                 self.next_token();

@@ -276,6 +276,7 @@ impl Interpreter {
         match expr {
             Expression::Literal(lit) => match lit {
                 Literal::Integer(i) => Ok(Value::Integer(*i)),
+                Literal::BigInt(s) => Ok(Value::Float(s.parse::<f64>().unwrap_or(0.0))),
                 Literal::Float(f) => Ok(Value::Float(*f)),
                 Literal::String(s) => Ok(Value::String(s.clone())),
                 Literal::Bool(b) => Ok(Value::Bool(*b)),

@@ -92,6 +92,7 @@ pub enum Intrinsic {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Integer(i64),
+    BigInt(String),
     Float(f64),
     String(String),
     Bool(bool),

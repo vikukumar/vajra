@@ -658,156 +658,25 @@ impl<'m> X86_64Codegen<'m> {
                 }
             }
 
-            IrInstr::Add(dst, a, b) => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x01, 0xC8])?; }
-            IrInstr::Sub(dst, a, b) => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x29, 0xC8])?; }
-            IrInstr::Mul(dst, a, b) => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x0F, 0xAF, 0xC1])?; }
-            IrInstr::Div(dst, a, b) => {
-                let is_const_10 = match fg.val_locs.get(b) {
-                    Some(ValueLoc::Imm(10)) => true,
-                    _ => false,
-                };
-                let is_const_5 = match fg.val_locs.get(b) {
-                    Some(ValueLoc::Imm(5)) => true,
-                    _ => false,
-                };
-
-                if is_const_10 {
-                    self.load_into(fg, *a, Reg::Rax)?;
-                    emit_mov_reg_reg(&mut fg.code, Reg::R10, Reg::Rax);
-                    emit_mov_imm64(&mut fg.code, Reg::Rcx, 0x6666666666666667);
-                    fg.emit(&[0x48, 0xF7, 0xE9]); // imul rcx
-                    fg.emit(&[0x48, 0xC1, 0xFA, 0x02]); // sar rdx, 2
-                    fg.emit(&[0x49, 0xC1, 0xEA, 0x3F]); // shr r10, 63
-                    fg.emit(&[0x4C, 0x01, 0xD2]); // add rdx, r10
-                    emit_mov_reg_reg(&mut fg.code, Reg::Rax, Reg::Rdx);
-                    
-                    fg.invalidate_reg(Reg::Rax);
-                    fg.invalidate_reg(Reg::Rdx);
-                    fg.invalidate_reg(Reg::R10);
-                    
-                    if fg.non_spillable.contains(dst) {
-                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
-                    } else {
-                        let off = fg.alloc_stack(8);
-                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
-                    }
-                    fg.set_reg(Reg::Rax, *dst);
-                } else if is_const_5 {
-                    self.load_into(fg, *a, Reg::Rax)?;
-                    emit_mov_reg_reg(&mut fg.code, Reg::R10, Reg::Rax);
-                    emit_mov_imm64(&mut fg.code, Reg::Rcx, 0x6666666666666667);
-                    fg.emit(&[0x48, 0xF7, 0xE9]); // imul rcx
-                    fg.emit(&[0x48, 0xC1, 0xFA, 0x01]); // sar rdx, 1
-                    fg.emit(&[0x49, 0xC1, 0xEA, 0x3F]); // shr r10, 63
-                    fg.emit(&[0x4C, 0x01, 0xD2]); // add rdx, r10
-                    emit_mov_reg_reg(&mut fg.code, Reg::Rax, Reg::Rdx);
-                    
-                    fg.invalidate_reg(Reg::Rax);
-                    fg.invalidate_reg(Reg::Rdx);
-                    fg.invalidate_reg(Reg::R10);
-                    
-                    if fg.non_spillable.contains(dst) {
-                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
-                    } else {
-                        let off = fg.alloc_stack(8);
-                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
-                    }
-                    fg.set_reg(Reg::Rax, *dst);
-                } else {
-                    self.load_operands(fg, *a, *b)?;
-                    fg.invalidate_reg(Reg::Rax);
-                    fg.invalidate_reg(Reg::Rdx);
-                    fg.code.extend_from_slice(&[0x48, 0x99, 0x48, 0xF7, 0xF9]); // cqo; idiv rcx
-                    if fg.non_spillable.contains(dst) {
-                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
-                    } else {
-                        let off = fg.alloc_stack(8);
-                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
-                    }
-                    fg.set_reg(Reg::Rax, *dst);
-                }
-            }
-            IrInstr::Rem(dst, a, b) => {
-                let is_const_10 = match fg.val_locs.get(b) {
-                    Some(ValueLoc::Imm(10)) => true,
-                    _ => false,
-                };
-                let is_const_5 = match fg.val_locs.get(b) {
-                    Some(ValueLoc::Imm(5)) => true,
-                    _ => false,
-                };
-
-                if is_const_10 {
-                    self.load_into(fg, *a, Reg::Rax)?;
-                    emit_mov_reg_reg(&mut fg.code, Reg::R10, Reg::Rax);
-                    emit_mov_imm64(&mut fg.code, Reg::Rcx, 0x6666666666666667);
-                    fg.emit(&[0x48, 0xF7, 0xE9]); // imul rcx
-                    fg.emit(&[0x48, 0xC1, 0xFA, 0x02]); // sar rdx, 2
-                    fg.emit(&[0x49, 0xC1, 0xEA, 0x3F]); // shr r10, 63
-                    fg.emit(&[0x4C, 0x01, 0xD2]); // add rdx, r10 (quotient in rdx)
-                    
-                    fg.emit(&[0x48, 0x6B, 0xD2, 0x0A]); // imul rdx, rdx, 10
-                    fg.emit(&[0x49, 0x29, 0xD2]); // sub r10, rdx
-                    emit_mov_reg_reg(&mut fg.code, Reg::Rdx, Reg::R10); // remainder in rdx
-                    
-                    fg.invalidate_reg(Reg::Rax);
-                    fg.invalidate_reg(Reg::Rdx);
-                    fg.invalidate_reg(Reg::R10);
-                    
-                    if fg.non_spillable.contains(dst) {
-                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rdx));
-                    } else {
-                        let off = fg.alloc_stack(8);
-                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rdx);
-                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
-                    }
-                    fg.set_reg(Reg::Rdx, *dst);
-                } else if is_const_5 {
-                    self.load_into(fg, *a, Reg::Rax)?;
-                    emit_mov_reg_reg(&mut fg.code, Reg::R10, Reg::Rax);
-                    emit_mov_imm64(&mut fg.code, Reg::Rcx, 0x6666666666666667);
-                    fg.emit(&[0x48, 0xF7, 0xE9]); // imul rcx
-                    fg.emit(&[0x48, 0xC1, 0xFA, 0x01]); // sar rdx, 1
-                    fg.emit(&[0x49, 0xC1, 0xEA, 0x3F]); // shr r10, 63
-                    fg.emit(&[0x4C, 0x01, 0xD2]); // add rdx, r10 (quotient in rdx)
-                    
-                    fg.emit(&[0x48, 0x6B, 0xD2, 0x05]); // imul rdx, rdx, 5
-                    fg.emit(&[0x49, 0x29, 0xD2]); // sub r10, rdx
-                    emit_mov_reg_reg(&mut fg.code, Reg::Rdx, Reg::R10); // remainder in rdx
-                    
-                    fg.invalidate_reg(Reg::Rax);
-                    fg.invalidate_reg(Reg::Rdx);
-                    fg.invalidate_reg(Reg::R10);
-                    
-                    if fg.non_spillable.contains(dst) {
-                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rdx));
-                    } else {
-                        let off = fg.alloc_stack(8);
-                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rdx);
-                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
-                    }
-                    fg.set_reg(Reg::Rdx, *dst);
-                } else {
-                    self.load_operands(fg, *a, *b)?;
-                    fg.invalidate_reg(Reg::Rax);
-                    fg.invalidate_reg(Reg::Rdx);
-                    fg.code.extend_from_slice(&[0x48, 0x99, 0x48, 0xF7, 0xF9]); // cqo; idiv rcx
-                    if fg.non_spillable.contains(dst) {
-                        fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rdx));
-                    } else {
-                        let off = fg.alloc_stack(8);
-                        emit_store_rbp_offset(&mut fg.code, off, Reg::Rdx);
-                        fg.val_locs.insert(*dst, ValueLoc::Stack(off));
-                    }
-                    fg.set_reg(Reg::Rdx, *dst);
-                }
-            }
+            IrInstr::Add(dst, a, b) => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_add")?; }
+            IrInstr::Sub(dst, a, b) => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_sub")?; }
+            IrInstr::Mul(dst, a, b) => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_mul")?; }
+            IrInstr::Div(dst, a, b) => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_div")?; }
+            IrInstr::Rem(dst, a, b) => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_rem")?; }
             IrInstr::Neg(dst, a) => {
-                self.load_into(fg, *a, Reg::Rax)?;
-                fg.code.extend_from_slice(&[0x48, 0xF7, 0xD8]); // neg rax
+                let arg_regs = get_arg_regs();
+                emit_mov_imm64(&mut fg.code, arg_regs[0], 1); // tagged 0
+                self.load_into(fg, *a, arg_regs[1])?;
+                fg.clear_cache();
+                #[cfg(target_os = "windows")]
+                fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+                fg.code.push(0xE8);
+                let patch = fg.pos();
+                fg.code.extend_from_slice(&[0; 4]);
+                fg.relocs.push(PendingReloc { offset: patch as u64, symbol: "vajra_sub".to_string(), addend: -4 });
+                #[cfg(target_os = "windows")]
+                fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                
                 fg.invalidate_reg(Reg::Rax);
                 if fg.non_spillable.contains(dst) {
                     fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
@@ -823,8 +692,20 @@ impl<'m> X86_64Codegen<'m> {
             IrInstr::FMul(dst, a, b) => { self.fop(fg, *dst, *a, *b, &[0xF2, 0x0F, 0x59, 0xC1])?; }
             IrInstr::FDiv(dst, a, b) => { self.fop(fg, *dst, *a, *b, &[0xF2, 0x0F, 0x5E, 0xC1])?; }
             IrInstr::Cmp(dst, op, a, b) => {
-                self.load_operands(fg, *a, *b)?;
-                fg.code.extend_from_slice(&[0x48, 0x39, 0xC8]); // cmp rax, rcx
+                let arg_regs = get_arg_regs();
+                self.load_into(fg, *a, arg_regs[0])?;
+                self.load_into(fg, *b, arg_regs[1])?;
+                fg.clear_cache();
+                #[cfg(target_os = "windows")]
+                fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+                fg.code.push(0xE8);
+                let patch = fg.pos();
+                fg.code.extend_from_slice(&[0; 4]);
+                fg.relocs.push(PendingReloc { offset: patch as u64, symbol: "vajra_cmp".to_string(), addend: -4 });
+                #[cfg(target_os = "windows")]
+                fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                
+                fg.code.extend_from_slice(&[0x48, 0x83, 0xF8, 0x00]); // cmp rax, 0
                 let setcc: u8 = match op {
                     CmpOp::Eq => 0x94, CmpOp::Ne => 0x95,
                     CmpOp::Lt => 0x9C, CmpOp::Le => 0x9E,
@@ -832,6 +713,8 @@ impl<'m> X86_64Codegen<'m> {
                 };
                 fg.code.extend_from_slice(&[0x0F, setcc, 0xC0]); // setCC al
                 fg.code.extend_from_slice(&[0x48, 0x0F, 0xB6, 0xC0]); // movzx rax, al
+                fg.code.extend_from_slice(&[0x48, 0xD1, 0xE0, 0x48, 0x83, 0xC0, 0x01]); // shl rax, 1; add rax, 1 (tag boolean)
+                
                 fg.invalidate_reg(Reg::Rax);
                 if fg.non_spillable.contains(dst) {
                     fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
@@ -842,11 +725,21 @@ impl<'m> X86_64Codegen<'m> {
                 }
                 fg.set_reg(Reg::Rax, *dst);
             }
-            IrInstr::And(dst, a, b) => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x21, 0xC8])?; }
-            IrInstr::Or(dst, a, b)  => { self.arith_op(fg, *dst, *a, *b, &[0x48, 0x09, 0xC8])?; }
+            IrInstr::And(dst, a, b) => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_and")?; }
+            IrInstr::Or(dst, a, b)  => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_or")?; }
             IrInstr::Not(dst, a) => {
-                self.load_into(fg, *a, Reg::Rax)?;
-                fg.code.extend_from_slice(&[0x48, 0x85, 0xC0, 0x0F, 0x94, 0xC0, 0x48, 0x0F, 0xB6, 0xC0]); // test rax,rax; sete al; movzx rax,al
+                let arg_regs = get_arg_regs();
+                self.load_into(fg, *a, arg_regs[0])?;
+                fg.clear_cache();
+                #[cfg(target_os = "windows")]
+                fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+                fg.code.push(0xE8);
+                let patch = fg.pos();
+                fg.code.extend_from_slice(&[0; 4]);
+                fg.relocs.push(PendingReloc { offset: patch as u64, symbol: "vajra_not".to_string(), addend: -4 });
+                #[cfg(target_os = "windows")]
+                fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                
                 fg.invalidate_reg(Reg::Rax);
                 if fg.non_spillable.contains(dst) {
                     fg.val_locs.insert(*dst, ValueLoc::Reg(Reg::Rax));
@@ -981,6 +874,32 @@ impl<'m> X86_64Codegen<'m> {
         Ok(())
     }
 
+    fn call_binary_helper(&self, fg: &mut FuncGen, dst: ValId, a: ValId, b: ValId, name: &str) -> Result<()> {
+        let arg_regs = get_arg_regs();
+        self.load_into(fg, a, arg_regs[0])?;
+        self.load_into(fg, b, arg_regs[1])?;
+        fg.clear_cache();
+        #[cfg(target_os = "windows")]
+        fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+        fg.code.push(0xE8);
+        let patch = fg.pos();
+        fg.code.extend_from_slice(&[0; 4]);
+        fg.relocs.push(PendingReloc { offset: patch as u64, symbol: name.to_string(), addend: -4 });
+        #[cfg(target_os = "windows")]
+        fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+        
+        fg.invalidate_reg(Reg::Rax);
+        if fg.non_spillable.contains(&dst) {
+            fg.val_locs.insert(dst, ValueLoc::Reg(Reg::Rax));
+        } else {
+            let off = fg.alloc_stack(8);
+            emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+            fg.val_locs.insert(dst, ValueLoc::Stack(off));
+        }
+        fg.set_reg(Reg::Rax, dst);
+        Ok(())
+    }
+
     fn fop(&self, fg: &mut FuncGen, dst: ValId, a: ValId, b: ValId, op_bytes: &[u8]) -> Result<()> {
         self.load_f64_into(fg, a, Reg::Xmm0)?;
         self.load_f64_into(fg, b, Reg::Xmm1)?;
@@ -1014,6 +933,7 @@ impl<'m> X86_64Codegen<'m> {
             }
             IrTerminator::Branch(cond, then_b, else_b) => {
                 self.load_into(fg, *cond, Reg::Rax)?;
+                fg.code.extend_from_slice(&[0x48, 0xD1, 0xF8]); // sar rax, 1
                 fg.code.extend_from_slice(&[0x48, 0x85, 0xC0]); // test rax, rax
                 fg.code.extend_from_slice(&[0x0F, 0x85]); // jne rel32
                 let then_patch = fg.pos();

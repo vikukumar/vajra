@@ -44,6 +44,7 @@ pub enum TokenKind {
     // Identifiers & Literals
     Identifier(String),
     Integer(i64),
+    BigInt(String),
     Float(f64),
     String(String),
 
@@ -517,14 +518,20 @@ impl<'a> Lexer<'a> {
                     TokenKind::Float(num.parse().unwrap_or(0.0))
                 } else if num.starts_with("0x") || num.starts_with("0X") {
                     let hex = &num[2..];
-                    TokenKind::Integer(i64::from_str_radix(hex, 16).unwrap_or(0))
+                    match i64::from_str_radix(hex, 16) {
+                        Ok(v) => TokenKind::Integer(v),
+                        Err(_) => TokenKind::BigInt(num),
+                    }
                 } else if num.starts_with("0b") || num.starts_with("0B") {
                     let bin = &num[2..];
-                    TokenKind::Integer(i64::from_str_radix(bin, 2).unwrap_or(0))
+                    match i64::from_str_radix(bin, 2) {
+                        Ok(v) => TokenKind::Integer(v),
+                        Err(_) => TokenKind::BigInt(num),
+                    }
                 } else {
                     match num.parse::<i64>() {
                         Ok(v) => TokenKind::Integer(v),
-                        Err(_) => TokenKind::Float(num.parse::<f64>().unwrap_or(0.0)),
+                        Err(_) => TokenKind::BigInt(num),
                     }
                 }
             }

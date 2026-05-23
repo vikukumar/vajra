@@ -145,13 +145,14 @@ impl AstToIr {
 
         // Emit implicit return if not terminated
         if !builder.is_terminated() {
-            let zero = builder.const_i64(0);
             if is_main {
+                let zero = builder.const_i64(0);
                 let truncated = builder.fresh_val();
                 builder.emit(IrInstr::Trunc(truncated, zero, IrType::I32));
                 builder.terminate(IrTerminator::Ret(truncated));
             } else {
-                builder.terminate(IrTerminator::Ret(zero));
+                let zero_tagged = builder.const_i64(1); // tagged 0
+                builder.terminate(IrTerminator::Ret(zero_tagged));
             }
         }
 
@@ -195,6 +196,17 @@ impl<'a> FuncContext<'a> {
         let mut bytes = s.as_bytes().to_vec();
         bytes.push(0);
         self.globals.push(IrGlobal { name: name.clone(), data: bytes, is_string: true });
+        name
+    }
+
+    fn intern_bigint_digits(&mut self, digits: &[u64]) -> String {
+        let name = format!(".bigint{}", self.str_count);
+        self.str_count += 1;
+        let mut bytes = Vec::with_capacity(digits.len() * 8);
+        for &d in digits {
+            bytes.extend_from_slice(&d.to_le_bytes());
+        }
+        self.globals.push(IrGlobal { name: name.clone(), data: bytes, is_string: false });
         name
     }
 
@@ -246,8 +258,9 @@ impl<'a> FuncContext<'a> {
                 let val = self.lower_expr(expr)?;
                 let is_main = self.builder.function.is_main;
                 if is_main {
+                    let untagged = self.builder.call("vajra_untag", vec![val]);
                     let truncated = self.builder.fresh_val();
-                    self.builder.emit(IrInstr::Trunc(truncated, val, IrType::I32));
+                    self.builder.emit(IrInstr::Trunc(truncated, untagged, IrType::I32));
                     self.builder.terminate(IrTerminator::Ret(truncated));
                 } else {
                     self.builder.terminate(IrTerminator::Ret(val));
@@ -316,10 +329,10 @@ impl<'a> FuncContext<'a> {
                     self.builder.switch_to(then_block);
                     let limit_minus_start = self.builder.sub(limit_val, start_val);
                     let limit_plus_start = self.builder.add(limit_val, start_val);
-                    let one = self.builder.const_i64(1);
+                    let one = self.builder.const_i64(3); // tagged 1
                     let sum_term = self.builder.sub(limit_plus_start, one);
                     let prod = self.builder.mul(limit_minus_start, sum_term);
-                    let two = self.builder.const_i64(2);
+                    let two = self.builder.const_i64(5); // tagged 2
                     let added = self.builder.fresh_val();
                     self.builder.emit(IrInstr::Div(added, prod, two));
                     let new_sum = self.builder.add(sum_start_val, added);
@@ -346,7 +359,7 @@ impl<'a> FuncContext<'a> {
                     let limit_n = self.lower_expr(&limit_expr_n)?;
                     let sum_start = self.builder.load(slot_sum, IrType::I64);
                     
-                    let ten = self.builder.const_i64(10);
+                    let ten = self.builder.const_i64(21); // tagged 10
                     let q = self.builder.fresh_val();
                     self.builder.emit(IrInstr::Div(q, limit_n, ten));
                     
@@ -382,9 +395,9 @@ impl<'a> FuncContext<'a> {
                         total_c += c;
                     }
                     
-                    let ta_val = self.builder.const_i64(total_a);
-                    let tb_val = self.builder.const_i64(total_b);
-                    let tc_val = self.builder.const_i64(total_c);
+                    let ta_val = self.builder.const_i64((total_a << 1) | 1);
+                    let tb_val = self.builder.const_i64((total_b << 1) | 1);
+                    let tc_val = self.builder.const_i64((total_c << 1) | 1);
                     
                     let term1 = self.builder.mul(ta_val, q2);
                     let term2 = self.builder.mul(tb_val, q);
@@ -407,7 +420,7 @@ impl<'a> FuncContext<'a> {
                     let rem_loop_merge = self.builder.fresh_block("rem_loop.merge");
                     
                     let rem_i_slot = self.builder.alloca(IrType::I64);
-                    let zero = self.builder.const_i64(0);
+                    let zero = self.builder.const_i64(1); // tagged 0
                     self.builder.store(zero, rem_i_slot);
                     
                     self.builder.terminate(IrTerminator::Jump(rem_loop_cond));
@@ -429,7 +442,7 @@ impl<'a> FuncContext<'a> {
                     let mut current_block = next_chain;
                     for r_l_idx in 0..10 {
                         self.builder.switch_to(current_block);
-                        let r_l_val = self.builder.const_i64(r_l_idx as i64);
+                        let r_l_val = self.builder.const_i64(((r_l_idx as i64) << 1) | 1);
                         let is_match = self.builder.cmp(CmpOp::Eq, r_l, r_l_val);
                         let action_block = self.builder.fresh_block(&format!("rem_action.{}", r_l_idx));
                         let next_block = self.builder.fresh_block(&format!("rem_chain.{}", r_l_idx + 1));
@@ -437,9 +450,9 @@ impl<'a> FuncContext<'a> {
                         
                         self.builder.switch_to(action_block);
                         let (a, b, c) = coeffs[r_l_idx];
-                        let a_val = self.builder.const_i64(a);
-                        let b_val = self.builder.const_i64(b);
-                        let c_val = self.builder.const_i64(c);
+                        let a_val = self.builder.const_i64((a << 1) | 1);
+                        let b_val = self.builder.const_i64((b << 1) | 1);
+                        let c_val = self.builder.const_i64((c << 1) | 1);
                         
                         let t1 = self.builder.mul(a_val, q2);
                         let t2 = self.builder.mul(b_val, q);
@@ -450,7 +463,7 @@ impl<'a> FuncContext<'a> {
                         let new_sum = self.builder.add(cur_sum, poly);
                         self.builder.store(new_sum, running_sum_slot);
                         
-                        let one = self.builder.const_i64(1);
+                        let one = self.builder.const_i64(3); // tagged 1
                         let next_i = self.builder.add(rem_i, one);
                         self.builder.store(next_i, rem_i_slot);
                         self.builder.terminate(IrTerminator::Jump(rem_loop_cond));
@@ -741,9 +754,34 @@ impl<'a> FuncContext<'a> {
     fn lower_expr(&mut self, expr: &Expression) -> Result<ValId> {
         match expr {
             Expression::Literal(lit) => match lit {
-                Literal::Integer(i) => Ok(self.builder.const_i64(*i)),
+                Literal::Integer(i) => {
+                    let val = *i;
+                    if val >= -4611686018427387904 && val <= 4611686018427387903 {
+                        Ok(self.builder.const_i64((val << 1) | 1))
+                    } else {
+                        let s = val.to_string();
+                        let (digits, sign) = parse_bigint_str(&s);
+                        let gname = self.intern_bigint_digits(&digits);
+                        let digits_ptr = self.builder.fresh_val();
+                        self.builder.emit(IrInstr::StrPtr(digits_ptr, gname));
+                        let len_val = self.builder.const_i64(digits.len() as i64);
+                        let sign_val = self.builder.const_i64(sign as i64);
+                        let r = self.builder.call("vajra_bigint_from_digits", vec![digits_ptr, len_val, sign_val]);
+                        Ok(r)
+                    }
+                }
+                Literal::BigInt(s) => {
+                    let (digits, sign) = parse_bigint_str(s);
+                    let gname = self.intern_bigint_digits(&digits);
+                    let digits_ptr = self.builder.fresh_val();
+                    self.builder.emit(IrInstr::StrPtr(digits_ptr, gname));
+                    let len_val = self.builder.const_i64(digits.len() as i64);
+                    let sign_val = self.builder.const_i64(sign as i64);
+                    let r = self.builder.call("vajra_bigint_from_digits", vec![digits_ptr, len_val, sign_val]);
+                    Ok(r)
+                }
                 Literal::Float(f) => Ok(self.builder.const_f64(*f)),
-                Literal::Bool(b) => Ok(self.builder.const_i64(if *b { 1 } else { 0 })),
+                Literal::Bool(b) => Ok(self.builder.const_i64(if *b { 3 } else { 1 })),
                 Literal::Null => Ok(self.builder.const_i64(0)),
                 Literal::String(s) => {
                     let gname = self.intern_str(s);
@@ -845,16 +883,18 @@ impl<'a> FuncContext<'a> {
                         let code = if args.is_empty() {
                             self.builder.const_i64(0)
                         } else {
-                            self.lower_expr(&args[0])?
+                            let c = self.lower_expr(&args[0])?;
+                            self.builder.call("vajra_untag", vec![c])
                         };
                         self.builder.call("vajra_exit", vec![code]);
                         self.builder.terminate(IrTerminator::Unreachable);
                         // Return a dummy value (unreachable)
-                        return Ok(self.builder.const_i64(0));
+                        return Ok(self.builder.const_i64(1));
                     }
                     "alloc" | "vajra_alloc" => {
                         let size = self.lower_expr(&args[0])?;
-                        return Ok(self.builder.call("vajra_alloc", vec![size]));
+                        let untagged_size = self.builder.call("vajra_untag", vec![size]);
+                        return Ok(self.builder.call("vajra_alloc", vec![untagged_size]));
                     }
                     "free" | "vajra_free" => {
                         let ptr = self.lower_expr(&args[0])?;
@@ -883,13 +923,15 @@ impl<'a> FuncContext<'a> {
                     Intrinsic::PrintLn(args) => self.lower_print(args, true),
                     Intrinsic::Exit(code) => {
                         let c = self.lower_expr(code)?;
-                        self.builder.call("vajra_exit", vec![c]);
+                        let untagged_code = self.builder.call("vajra_untag", vec![c]);
+                        self.builder.call("vajra_exit", vec![untagged_code]);
                         self.builder.terminate(IrTerminator::Unreachable);
-                        Ok(self.builder.const_i64(0))
+                        Ok(self.builder.const_i64(1))
                     }
                     Intrinsic::Alloc(size) => {
                         let s = self.lower_expr(size)?;
-                        Ok(self.builder.call("vajra_alloc", vec![s]))
+                        let untagged_size = self.builder.call("vajra_untag", vec![s]);
+                        Ok(self.builder.call("vajra_alloc", vec![untagged_size]))
                     }
                     Intrinsic::Free(ptr) => {
                         let p = self.lower_expr(ptr)?;
@@ -1018,6 +1060,7 @@ impl<'a> FuncContext<'a> {
         match expr {
             Expression::Literal(lit) => match lit {
                 Literal::Integer(_) => VajraType::I64,
+                Literal::BigInt(_) => VajraType::I64,
                 Literal::Float(_) => VajraType::F64,
                 Literal::String(_) => VajraType::Str,
                 Literal::Bool(_) => VajraType::Bool,
@@ -1457,4 +1500,33 @@ fn detect_nn_loop_folding(
         }
     }
     None
+}
+
+fn parse_bigint_str(s: &str) -> (Vec<u64>, i32) {
+    let s = s.trim();
+    if s.is_empty() {
+        return (vec![0], 1);
+    }
+    let (s, sign) = if s.starts_with('-') {
+        (&s[1..], -1)
+    } else if s.starts_with('+') {
+        (&s[1..], 1)
+    } else {
+        (s, 1)
+    };
+    
+    let mut digits = Vec::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = chars.len();
+    while i > 0 {
+        let start = if i >= 9 { i - 9 } else { 0 };
+        let slice: String = chars[start..i].iter().collect();
+        let val = slice.parse::<u64>().unwrap_or(0);
+        digits.push(val);
+        i = start;
+    }
+    while digits.len() > 1 && digits.last() == Some(&0) {
+        digits.pop();
+    }
+    (digits, sign)
 }
