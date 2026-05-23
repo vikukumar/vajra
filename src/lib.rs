@@ -10,6 +10,7 @@ pub mod linker;
 pub mod runtime;
 pub mod eval;
 pub mod lint;
+pub mod preprocessor;
 
 pub use ast::Program;
 pub use lexer::Lexer;
@@ -27,8 +28,9 @@ pub fn compile_source(
     backend: Backend,
     platform: TargetPlatform,
 ) -> Result<Vec<u8>> {
-    // 1. Lex + Parse
-    let lexer = Lexer::new(source);
+    // 1. Preprocess + Lex + Parse
+    let preprocessed = preprocessor::preprocess_source(source);
+    let lexer = Lexer::new(&preprocessed);
     let mut parser = Parser::new(lexer);
     let program = parser.parse_program();
 
@@ -47,7 +49,8 @@ pub fn compile_source(
 
 /// Parse only — returns the AST
 pub fn parse_source(source: &str) -> Program {
-    let lexer = Lexer::new(source);
+    let preprocessed = preprocessor::preprocess_source(source);
+    let lexer = Lexer::new(&preprocessed);
     let mut parser = Parser::new(lexer);
     parser.parse_program()
 }

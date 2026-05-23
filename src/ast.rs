@@ -41,6 +41,11 @@ pub enum Expression {
         object: Box<Expression>,
         property: String,
     },
+    PropertyAssign {
+        object: Box<Expression>,
+        property: String,
+        value: Box<Expression>,
+    },
     BinaryOp {
         left: Box<Expression>,
         op: String,
@@ -52,6 +57,11 @@ pub enum Expression {
     },
     Assign {
         name: String,
+        value: Box<Expression>,
+    },
+    IndexAssign {
+        object: Box<Expression>,
+        index: Box<Expression>,
         value: Box<Expression>,
     },
     Spawn {
@@ -130,6 +140,7 @@ pub enum Statement {
     },
     Class {
         name: String,
+        base: Option<String>,
         fields: Vec<(String, VajraType)>,
         methods: Vec<Statement>,
     },

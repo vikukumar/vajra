@@ -3,9 +3,16 @@
 /// This is what's used by `vajrac repl` and `vajrac exec`.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use crate::ast::*;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
+pub struct ObjectInstance {
+    pub class_name: String,
+    pub fields: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Integer(i64),
     Float(f64),
@@ -16,6 +23,25 @@ pub enum Value {
     Return(Box<Value>),
     Break,
     Continue,
+    Object(Arc<Mutex<ObjectInstance>>),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Integer(a), Value::Integer(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Null, Value::Null) => true,
+            (Value::Void, Value::Void) => true,
+            (Value::Return(a), Value::Return(b)) => a == b,
+            (Value::Break, Value::Break) => true,
+            (Value::Continue, Value::Continue) => true,
+            (Value::Object(a), Value::Object(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Display for Value {
@@ -35,6 +61,10 @@ impl std::fmt::Display for Value {
             Value::Void => Ok(()),
             Value::Return(v) => write!(f, "{}", v),
             Value::Break | Value::Continue => Ok(()),
+            Value::Object(obj) => {
+                let guard = obj.lock().unwrap();
+                write!(f, "[object {}]", guard.class_name)
+            }
         }
     }
 }
@@ -46,21 +76,55 @@ pub struct FuncDef {
     pub body: Vec<Statement>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ClassDef {
+    pub name: String,
+    pub base: Option<String>,
+    pub fields: Vec<(String, VajraType)>,
+    pub methods: HashMap<String, Statement>,
+}
+
 /// The Interpreter (renamed from Evaluator to match new API)
 pub struct Interpreter {
     /// Current scope stack (global + local frames)
     scopes: Vec<HashMap<String, Value>>,
     /// Defined functions
     functions: HashMap<String, FuncDef>,
+    /// Defined classes
+    classes: HashMap<String, ClassDef>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        let interp = Self {
-            scopes: vec![HashMap::new()],
+        let global_obj = Value::Object(Arc::new(Mutex::new(ObjectInstance {
+            class_name: "GlobalClass".to_string(),
+            fields: HashMap::new(),
+        })));
+        let mut global_scope = HashMap::new();
+        global_scope.insert("Global".to_string(), global_obj.clone());
+        global_scope.insert("global".to_string(), global_obj);
+
+        let math_obj = Value::Object(Arc::new(Mutex::new(ObjectInstance {
+            class_name: "Math".to_string(),
+            fields: HashMap::new(),
+        })));
+        let random_obj = Value::Object(Arc::new(Mutex::new(ObjectInstance {
+            class_name: "Random".to_string(),
+            fields: HashMap::new(),
+        })));
+        let datetime_obj = Value::Object(Arc::new(Mutex::new(ObjectInstance {
+            class_name: "DateTime".to_string(),
+            fields: HashMap::new(),
+        })));
+        global_scope.insert("Math".to_string(), math_obj);
+        global_scope.insert("Random".to_string(), random_obj);
+        global_scope.insert("DateTime".to_string(), datetime_obj);
+
+        Self {
+            scopes: vec![global_scope],
             functions: HashMap::new(),
-        };
-        interp
+            classes: HashMap::new(),
+        }
     }
 
     /// Run a program (used by REPL and exec mode)
@@ -119,7 +183,21 @@ impl Interpreter {
                     body: body.clone(),
                 });
             }
-            Statement::Class { methods, .. } => {
+            Statement::Class { name, base, fields, methods } => {
+                let mut method_map = HashMap::new();
+                for m in methods {
+                    if let Statement::Method { name: mname, .. } = m {
+                        method_map.insert(mname.clone(), m.clone());
+                    } else if let Statement::Function { name: mname, .. } = m {
+                        method_map.insert(mname.clone(), m.clone());
+                    }
+                }
+                self.classes.insert(name.clone(), ClassDef {
+                    name: name.clone(),
+                    base: base.clone(),
+                    fields: fields.clone(),
+                    methods: method_map,
+                });
                 for m in methods { self.hoist_functions(m); }
             }
             _ => {}
@@ -461,50 +539,279 @@ impl Interpreter {
 
             Expression::MethodCall { receiver, method, args } => {
                 let recv_val = self.eval_expression(receiver)?;
-                match (recv_val, method.as_str()) {
-                    (Value::String(s), "len") => Ok(Value::Integer(s.len() as i64)),
-                    (Value::String(s), "to_upper") => Ok(Value::String(s.to_uppercase())),
-                    (Value::String(s), "to_lower") => Ok(Value::String(s.to_lowercase())),
-                    (Value::String(s), "trim") => Ok(Value::String(s.trim().to_string())),
-                    (Value::String(s), "contains") => {
-                        if let Some(arg) = args.first() {
-                            let pattern = self.eval_expression(arg)?;
-                            if let Value::String(p) = pattern {
-                                Ok(Value::Bool(s.contains(&p)))
-                            } else { Ok(Value::Bool(false)) }
-                        } else { Ok(Value::Bool(false)) }
-                    }
-                    (Value::String(s), "split") => {
-                        // Returns first part for now (full array support in v0.3)
-                        Ok(Value::String(s.split_whitespace().next().unwrap_or("").to_string()))
-                    }
-                    (_, "log") | (_, "println") | (_, "print") | (_, "out") => {
-                        // console.log, System.out.println etc.
-                        self.builtin_print(args, true)
-                    }
-                    (recv, method_name) => {
-                        // Try as a user function call
-                        let func_name = method_name.to_string();
-                        if let Some(func) = self.functions.get(&func_name).cloned() {
-                            let mut call_args = vec![recv];
-                            for arg in args {
-                                call_args.push(self.eval_expression(arg)?);
-                            }
-                            self.push_scope();
-                            for (param, val) in func.params.iter().zip(call_args.iter()) {
-                                if let Some(scope) = self.scopes.last_mut() {
-                                    scope.insert(param.clone(), val.clone());
+                let mut eval_args = Vec::new();
+                for arg in args {
+                    eval_args.push(self.eval_expression(arg)?);
+                }
+
+                match &recv_val {
+                    Value::Integer(n) => {
+                        if eval_args.len() != 1 {
+                            return Err(format!("Method '{}' expects exactly 1 argument", method));
+                        }
+                        let arg_int = match eval_args[0] {
+                            Value::Integer(i) => i,
+                            _ => return Err("Expected integer argument".to_string()),
+                        };
+                        match method.as_str() {
+                            "add" => Ok(Value::Integer(n.wrapping_add(arg_int))),
+                            "sub" => Ok(Value::Integer(n.wrapping_sub(arg_int))),
+                            "mul" => Ok(Value::Integer(n.wrapping_mul(arg_int))),
+                            "div" => {
+                                if arg_int == 0 {
+                                    Err("Division by zero".to_string())
+                                } else {
+                                    Ok(Value::Integer(n / arg_int))
                                 }
                             }
+                            _ => Err(format!("Method '{}' not found on Integer", method)),
+                        }
+                    }
+                    Value::Float(f) => {
+                        if eval_args.len() != 1 {
+                            return Err(format!("Method '{}' expects exactly 1 argument", method));
+                        }
+                        let arg_float = match eval_args[0] {
+                            Value::Float(other) => other,
+                            Value::Integer(i) => i as f64,
+                            _ => return Err("Expected number argument".to_string()),
+                        };
+                        match method.as_str() {
+                            "add" => Ok(Value::Float(f + arg_float)),
+                            "sub" => Ok(Value::Float(f - arg_float)),
+                            "mul" => Ok(Value::Float(f * arg_float)),
+                            "div" => {
+                                if arg_float == 0.0 {
+                                    Err("Division by zero".to_string())
+                                } else {
+                                    Ok(Value::Float(f / arg_float))
+                                }
+                            }
+                            _ => Err(format!("Method '{}' not found on Float", method)),
+                        }
+                    }
+                    Value::String(s) => {
+                        match method.as_str() {
+                            "len" | "length" => Ok(Value::Integer(s.len() as i64)),
+                            "to_upper" | "toUpperCase" | "upper" => Ok(Value::String(s.to_uppercase())),
+                            "to_lower" | "toLowerCase" | "lower" => Ok(Value::String(s.to_lowercase())),
+                            "trim" => Ok(Value::String(s.trim().to_string())),
+                            "contains" => {
+                                if let Some(Value::String(p)) = eval_args.first() {
+                                    Ok(Value::Bool(s.contains(p)))
+                                } else { Ok(Value::Bool(false)) }
+                            }
+                            "indexOf" | "index_of" => {
+                                if let Some(Value::String(p)) = eval_args.first() {
+                                    match s.find(p) {
+                                        Some(idx) => Ok(Value::Integer(idx as i64)),
+                                        None => Ok(Value::Integer(-1)),
+                                    }
+                                } else { Ok(Value::Integer(-1)) }
+                            }
+                            "substring" | "substr" => {
+                                let start = match eval_args.get(0) {
+                                    Some(Value::Integer(i)) => *i as usize,
+                                    _ => 0,
+                                };
+                                let end = match eval_args.get(1) {
+                                    Some(Value::Integer(i)) => *i as usize,
+                                    _ => s.len(),
+                                };
+                                let start = start.min(s.len());
+                                let end = end.min(s.len()).max(start);
+                                Ok(Value::String(s[start..end].to_string()))
+                            }
+                            "split" => {
+                                let delim = match eval_args.first() {
+                                    Some(Value::String(d)) => d.as_str(),
+                                    _ => " ",
+                                };
+                                let mut fields = HashMap::new();
+                                let mut count = 0;
+                                for part in s.split(delim) {
+                                    fields.insert(count.to_string(), Value::String(part.to_string()));
+                                    count += 1;
+                                }
+                                fields.insert("length".to_string(), Value::Integer(count as i64));
+                                let arr_obj = ObjectInstance {
+                                    class_name: "Array".to_string(),
+                                    fields,
+                                };
+                                Ok(Value::Object(Arc::new(Mutex::new(arr_obj))))
+                            }
+                            _ => Err(format!("Unknown string method: {}", method)),
+                        }
+                    }
+
+                    Value::Object(obj) => {
+                        let class_name = {
+                            let guard = obj.lock().unwrap();
+                            guard.class_name.clone()
+                        };
+
+                        if class_name == "Math" {
+                            match method.as_str() {
+                                "sin" => {
+                                    let val = eval_val_to_f64(eval_args.first().unwrap_or(&Value::Float(0.0)))?;
+                                    Ok(Value::Float(val.sin()))
+                                }
+                                "cos" => {
+                                    let val = eval_val_to_f64(eval_args.first().unwrap_or(&Value::Float(0.0)))?;
+                                    Ok(Value::Float(val.cos()))
+                                }
+                                "tan" => {
+                                    let val = eval_val_to_f64(eval_args.first().unwrap_or(&Value::Float(0.0)))?;
+                                    Ok(Value::Float(val.tan()))
+                                }
+                                "sqrt" => {
+                                    let val = eval_val_to_f64(eval_args.first().unwrap_or(&Value::Float(0.0)))?;
+                                    Ok(Value::Float(val.sqrt()))
+                                }
+                                "abs" => {
+                                    let val = eval_args.first().unwrap_or(&Value::Integer(0));
+                                    match val {
+                                        Value::Integer(i) => Ok(Value::Integer(i.abs())),
+                                        Value::Float(f) => Ok(Value::Float(f.abs())),
+                                        _ => Err("abs requires a number".to_string()),
+                                    }
+                                }
+                                "log" => {
+                                    let val = eval_val_to_f64(eval_args.first().unwrap_or(&Value::Float(0.0)))?;
+                                    Ok(Value::Float(val.log(std::f64::consts::E)))
+                                }
+                                "pow" => {
+                                    let base = eval_val_to_f64(eval_args.get(0).unwrap_or(&Value::Float(0.0)))?;
+                                    let exp = eval_val_to_f64(eval_args.get(1).unwrap_or(&Value::Float(0.0)))?;
+                                    Ok(Value::Float(base.powf(exp)))
+                                }
+                                _ => Err(format!("Unknown Math method: {}", method)),
+                            }
+                        } else if class_name == "Random" {
+                            match method.as_str() {
+                                "int" | "nextInt" => {
+                                    let min = match eval_args.get(0) {
+                                        Some(Value::Integer(i)) => *i,
+                                        _ => 0,
+                                    };
+                                    let max = match eval_args.get(1) {
+                                        Some(Value::Integer(i)) => *i,
+                                        _ => 100,
+                                    };
+                                    let val = interpreter_random_int(min, max);
+                                    Ok(Value::Integer(val))
+                                }
+                                "float" | "nextFloat" => {
+                                    let val = interpreter_random_float();
+                                    Ok(Value::Float(val))
+                                }
+                                _ => Err(format!("Unknown Random method: {}", method)),
+                            }
+                        } else if class_name == "DateTime" {
+                            match method.as_str() {
+                                "now" | "epoch" => {
+                                    let val = interpreter_datetime_now();
+                                    Ok(Value::Integer(val))
+                                }
+                                _ => Err(format!("Unknown DateTime method: {}", method)),
+                            }
+                        } else if class_name == "Socket" {
+                            let handle = {
+                                let guard = obj.lock().unwrap();
+                                match guard.fields.get("_handle") {
+                                    Some(Value::Integer(h)) => *h,
+                                    _ => -1,
+                                }
+                            };
+                            match method.as_str() {
+                                "connect" => {
+                                    let ip = match eval_args.get(0) {
+                                        Some(Value::String(s)) => s.as_str(),
+                                        _ => "127.0.0.1",
+                                    };
+                                    let port = match eval_args.get(1) {
+                                        Some(Value::Integer(i)) => *i,
+                                        _ => 80,
+                                    };
+                                    let res = interpreter_socket_connect(handle, ip, port);
+                                    Ok(Value::Integer(res))
+                                }
+                                "send" => {
+                                    let data = match eval_args.get(0) {
+                                        Some(Value::String(s)) => s.as_str(),
+                                        _ => "",
+                                    };
+                                    let res = interpreter_socket_send(handle, data);
+                                    Ok(Value::Integer(res))
+                                }
+                                "recv" => {
+                                    let len = match eval_args.get(0) {
+                                        Some(Value::Integer(i)) => *i,
+                                        _ => 1024,
+                                    };
+                                    match interpreter_socket_recv(handle, len) {
+                                        Ok(s) => Ok(Value::String(s)),
+                                        Err(e) => Err(e),
+                                    }
+                                }
+                                "close" => {
+                                    let res = interpreter_socket_close(handle);
+                                    Ok(Value::Integer(res))
+                                }
+                                _ => Err(format!("Unknown Socket method: {}", method)),
+                            }
+                        } else {
+                            let mut found_method = None;
+                            let mut current_class = Some(class_name.clone());
+                            while let Some(cls_name) = current_class {
+                                if let Some(cls) = self.classes.get(&cls_name) {
+                                    if let Some(m) = cls.methods.get(method) {
+                                        found_method = Some(m.clone());
+                                        break;
+                                    }
+                                    current_class = cls.base.clone();
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            let method_stmt = found_method.ok_or_else(|| {
+                                format!("Method '{}' not found on class '{}'", method, class_name)
+                            })?;
+
+                            let (params, body) = match &method_stmt {
+                                Statement::Method { params, body, .. } => (params, body),
+                                Statement::Function { params, body, .. } => (params, body),
+                                _ => return Err("Invalid method definition".to_string()),
+                            };
+
+                            self.push_scope();
+                            if let Some(scope) = self.scopes.last_mut() {
+                                scope.insert("this".to_string(), recv_val.clone());
+                            }
+                            for (param, val) in params.iter().zip(eval_args.iter()) {
+                                if let Some(scope) = self.scopes.last_mut() {
+                                    scope.insert(param.name.clone(), val.clone());
+                                }
+                            }
+
                             let mut result = Value::Void;
-                            for stmt in &func.body {
+                            for stmt in body {
                                 result = self.eval_statement(stmt)?;
-                                if let Value::Return(v) = result { result = *v; break; }
+                                if let Value::Return(v) = result {
+                                    result = *v;
+                                    break;
+                                }
                             }
                             self.pop_scope();
                             Ok(result)
+                        }
+                    }
+                    _ => {
+                        if method == "log" || method == "println" || method == "print" {
+                            self.builtin_print(args, true)
                         } else {
-                            Ok(Value::Void)
+                            Err(format!("Cannot call method '{}' on non-object value", method))
                         }
                     }
                 }
@@ -512,19 +819,127 @@ impl Interpreter {
 
             Expression::PropertyAccess { object, property } => {
                 let obj = self.eval_expression(object)?;
-                match (obj, property.as_str()) {
-                    (Value::String(s), "len" | "length") => Ok(Value::Integer(s.len() as i64)),
+                match obj {
+                    Value::Object(o) => {
+                        let guard = o.lock().unwrap();
+                        if let Some(v) = guard.fields.get(property) {
+                            Ok(v.clone())
+                        } else {
+                            Ok(Value::Null)
+                        }
+                    }
+                    Value::String(s) => {
+                        match property.as_str() {
+                            "len" | "length" => Ok(Value::Integer(s.len() as i64)),
+                            _ => Ok(Value::Null),
+                        }
+                    }
                     _ => Ok(Value::Null),
                 }
             }
 
+            Expression::PropertyAssign { object, property, value } => {
+                let obj_val = self.eval_expression(object)?;
+                let val = self.eval_expression(value)?;
+                match obj_val {
+                    Value::Object(o) => {
+                        let mut guard = o.lock().unwrap();
+                        guard.fields.insert(property.clone(), val.clone());
+                        Ok(val)
+                    }
+                    _ => Err("Cannot assign property of non-object".to_string()),
+                }
+            }
+
+            Expression::IndexAssign { object, index, value } => {
+                let obj_val = self.eval_expression(object)?;
+                let idx_val = self.eval_expression(index)?;
+                let val = self.eval_expression(value)?;
+                match obj_val {
+                    Value::Object(o) => {
+                        let idx_str = format!("{}", idx_val);
+                        let mut guard = o.lock().unwrap();
+                        guard.fields.insert(idx_str, val.clone());
+                        Ok(val)
+                    }
+                    _ => Err("Cannot index-assign non-object".to_string()),
+                }
+            }
+
             Expression::Spawn { task } => {
-                // In interpreter mode, just execute synchronously
                 self.eval_expression(task)
             }
 
-            Expression::ObjectInstantiation { class_name: _, args: _ } => {
-                Ok(Value::Null) // simplified
+            Expression::ObjectInstantiation { class_name, args } => {
+                let mut fields = HashMap::new();
+                let mut current_class = Some(class_name.clone());
+                while let Some(cls_name) = current_class {
+                    if let Some(cls) = self.classes.get(&cls_name) {
+                        for (fname, _) in &cls.fields {
+                            fields.insert(fname.clone(), Value::Null);
+                        }
+                        current_class = cls.base.clone();
+                    } else {
+                        break;
+                    }
+                }
+
+                // Special case for Socket
+                if class_name == "Socket" {
+                    fields.insert("_handle".to_string(), interpreter_socket_create());
+                }
+
+                let obj_val = Value::Object(Arc::new(Mutex::new(ObjectInstance {
+                    class_name: class_name.clone(),
+                    fields,
+                })));
+
+                let mut constructor = None;
+                let constructor_names = ["init", "constructor", class_name];
+                let mut current_class = Some(class_name.clone());
+                'find_ctor: while let Some(cls_name) = current_class {
+                    if let Some(cls) = self.classes.get(&cls_name) {
+                        for name in &constructor_names {
+                            if let Some(m) = cls.methods.get(*name) {
+                                constructor = Some(m.clone());
+                                break 'find_ctor;
+                            }
+                        }
+                        current_class = cls.base.clone();
+                    } else {
+                        break;
+                    }
+                }
+
+                if let Some(ctor) = constructor {
+                    let mut eval_args = Vec::new();
+                    for arg in args {
+                        eval_args.push(self.eval_expression(arg)?);
+                    }
+                    let (params, body) = match &ctor {
+                        Statement::Method { params, body, .. } => (params, body),
+                        Statement::Function { params, body, .. } => (params, body),
+                        _ => return Err("Invalid constructor definition".to_string()),
+                    };
+                    self.push_scope();
+                    if let Some(scope) = self.scopes.last_mut() {
+                        scope.insert("this".to_string(), obj_val.clone());
+                    }
+                    for (param, val) in params.iter().zip(eval_args.iter()) {
+                        if let Some(scope) = self.scopes.last_mut() {
+                            scope.insert(param.name.clone(), val.clone());
+                        }
+                    }
+                    for stmt in body {
+                        let res = self.eval_statement(stmt)?;
+                        if let Value::Return(_) = res {
+                            break;
+                        }
+                    }
+                    self.pop_scope();
+                }
+
+                Ok(obj_val)
             }
 
             Expression::Index { object, index } => {
@@ -539,6 +954,11 @@ impl Interpreter {
                         } else {
                             Err(format!("Index {} out of bounds for string of length {}", idx, chars.len()))
                         }
+                    }
+                    (Value::Object(o), idx_val) => {
+                        let idx_str = format!("{}", idx_val);
+                        let guard = o.lock().unwrap();
+                        Ok(guard.fields.get(&idx_str).cloned().unwrap_or(Value::Null))
                     }
                     _ => Ok(Value::Null),
                 }
@@ -589,6 +1009,7 @@ fn is_truthy(v: &Value) -> bool {
         Value::Bool(b) => *b,
         Value::Null | Value::Void => false,
         Value::Return(_) | Value::Break | Value::Continue => false,
+        Value::Object(_) => true,
     }
 }
 
@@ -683,3 +1104,123 @@ fn float_op(a: f64, op: &str, b: f64) -> Result<Value, String> {
         _    => Err(format!("Unknown float operator: '{}'", op)),
     }
 }
+
+// === Sockets, Math, Random, DateTime Interpreter Helpers ===
+
+fn eval_val_to_f64(v: &Value) -> Result<f64, String> {
+    match v {
+        Value::Integer(i) => Ok(*i as f64),
+        Value::Float(f) => Ok(*f),
+        _ => Err("Expected a number".to_string()),
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref G_INTERPRETER_SOCKETS: Mutex<Vec<Option<std::net::TcpStream>>> = Mutex::new(Vec::new());
+}
+
+fn interpreter_socket_create() -> Value {
+    let mut sockets = G_INTERPRETER_SOCKETS.lock().unwrap();
+    for (i, slot) in sockets.iter().enumerate() {
+        if slot.is_none() {
+            return Value::Integer(i as i64);
+        }
+    }
+    sockets.push(None);
+    Value::Integer((sockets.len() - 1) as i64)
+}
+
+fn interpreter_socket_connect(sock_id: i64, ip: &str, port: i64) -> i64 {
+    let addr = format!("{}:{}", ip, port);
+    match std::net::TcpStream::connect(&addr) {
+        Ok(stream) => {
+            let mut sockets = G_INTERPRETER_SOCKETS.lock().unwrap();
+            if (sock_id as usize) < sockets.len() {
+                sockets[sock_id as usize] = Some(stream);
+                0
+            } else {
+                -1
+            }
+        }
+        Err(_) => -1,
+    }
+}
+
+fn interpreter_socket_send(sock_id: i64, data: &str) -> i64 {
+    let mut sockets = G_INTERPRETER_SOCKETS.lock().unwrap();
+    if let Some(Some(stream)) = sockets.get_mut(sock_id as usize) {
+        use std::io::Write;
+        match stream.write_all(data.as_bytes()) {
+            Ok(_) => data.len() as i64,
+            Err(_) => -1,
+        }
+    } else {
+        -1
+    }
+}
+
+fn interpreter_socket_recv(sock_id: i64, len: i64) -> Result<String, String> {
+    let mut sockets = G_INTERPRETER_SOCKETS.lock().unwrap();
+    if let Some(Some(stream)) = sockets.get_mut(sock_id as usize) {
+        use std::io::Read;
+        let mut buf = vec![0u8; len as usize];
+        match stream.read(&mut buf) {
+            Ok(n) => {
+                let s = String::from_utf8_lossy(&buf[..n]).into_owned();
+                Ok(s)
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    } else {
+        Err("Socket not found".to_string())
+    }
+}
+
+fn interpreter_socket_close(sock_id: i64) -> i64 {
+    let mut sockets = G_INTERPRETER_SOCKETS.lock().unwrap();
+    if (sock_id as usize) < sockets.len() {
+        sockets[sock_id as usize] = None;
+        0
+    } else {
+        -1
+    }
+}
+
+fn interpreter_random_int(min: i64, max: i64) -> i64 {
+    use std::cell::Cell;
+    thread_local! {
+        static SEED: Cell<u64> = Cell::new(0x123456789abcdef);
+    }
+    SEED.with(|s| {
+        let mut x = s.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        s.set(x);
+        if min >= max { return min; }
+        min + (x % (max - min) as u64) as i64
+    })
+}
+
+fn interpreter_random_float() -> f64 {
+    use std::cell::Cell;
+    thread_local! {
+        static SEED: Cell<u64> = Cell::new(0x123456789abcdef);
+    }
+    SEED.with(|s| {
+        let mut x = s.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        s.set(x);
+        (x & 0xFFFFFFFFFFFF) as f64 / 281474976710655.0
+    })
+}
+
+fn interpreter_datetime_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+

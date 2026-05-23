@@ -365,6 +365,32 @@ struct BigInt {
     digits: *mut u64,
 }
 
+unsafe fn print_bigint_nn(b: *const BigInt) {
+    if b.is_null() {
+        print_raw(b"null".as_ptr(), 4);
+    } else if (*b).len == 0 {
+        print_raw(b"0".as_ptr(), 1);
+    } else {
+        if (*b).sign < 0 {
+            print_raw(b"-".as_ptr(), 1);
+        }
+        let msd_idx = (*b).len as usize - 1;
+        print_i64_nn(*(*b).digits.add(msd_idx) as i64);
+        for i in (0..msd_idx).rev() {
+            let digit = *(*b).digits.add(i);
+            let mut buf = [b'0'; 9];
+            let mut temp = digit;
+            let mut ptr = 9;
+            while temp > 0 && ptr > 0 {
+                ptr -= 1;
+                *buf.as_mut_ptr().add(ptr) = b'0' + (temp % 10) as u8;
+                temp /= 10;
+            }
+            print_raw(buf.as_ptr(), 9);
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn vajra_print_i64(val: i64) {
     let uval = val as u64;
@@ -372,29 +398,7 @@ pub unsafe extern "C" fn vajra_print_i64(val: i64) {
         print_i64_nn(untag(uval));
     } else {
         let b = uval as *const BigInt;
-        if b.is_null() {
-            print_raw(b"null".as_ptr(), 4);
-        } else if (*b).len == 0 {
-            print_raw(b"0".as_ptr(), 1);
-        } else {
-            if (*b).sign < 0 {
-                print_raw(b"-".as_ptr(), 1);
-            }
-            let msd_idx = (*b).len as usize - 1;
-            print_i64_nn(*(*b).digits.add(msd_idx) as i64);
-            for i in (0..msd_idx).rev() {
-                let digit = *(*b).digits.add(i);
-                let mut buf = [b'0'; 9];
-                let mut temp = digit;
-                let mut ptr = 9;
-                while temp > 0 && ptr > 0 {
-                    ptr -= 1;
-                    *buf.as_mut_ptr().add(ptr) = b'0' + (temp % 10) as u8;
-                    temp /= 10;
-                }
-                print_raw(buf.as_ptr(), 9);
-            }
-        }
+        print_bigint_nn(b);
     }
     print_raw(EOL.as_ptr(), EOL.len());
 }
@@ -465,10 +469,88 @@ pub unsafe extern "C" fn vajra_print_str(s: *const u8) {
     print_raw(EOL.as_ptr(), EOL.len());
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn vajra_print_auto(s: *const u8) {
-    vajra_print_str(s);
+unsafe fn is_heap_ptr(val: u64) -> bool {
+    let ptr = val as *mut u8;
+    for i in 0..MAX_THREADS {
+        let start = G_HEAP_STARTS[i];
+        if !start.is_null() {
+            let bump = G_HEAP_BUMPS[i];
+            if ptr >= start && ptr < start.add(bump) {
+                return true;
+            }
+        }
+    }
+    false
 }
+
+unsafe fn is_valid_class_name_ptr(ptr: *const u8) -> bool {
+    if ptr.is_null() { return false; }
+    
+    // Check if ptr is within the executable image (near vajra_runtime_init)
+    let base = vajra_runtime_init as usize;
+    let target = ptr as usize;
+    let diff = if target > base { target - base } else { base - target };
+    if diff > 10 * 1024 * 1024 { // 10 MB limit
+        return false;
+    }
+    
+    let mut len = 0;
+    loop {
+        let c = *ptr.add(len);
+        if c == 0 { break; }
+        if len == 0 {
+            if !c.is_ascii_alphabetic() { return false; }
+        } else {
+            if !c.is_ascii_alphanumeric() && c != b'_' { return false; }
+        }
+        len += 1;
+        if len > 50 { return false; }
+    }
+    len > 0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_print_auto(val: u64) {
+    print_raw(b"DBG print_auto: val=".as_ptr(), 20);
+    print_i64_nn(val as i64);
+    print_raw(EOL.as_ptr(), EOL.len());
+
+    if val == 0 {
+        print_raw(b"null".as_ptr(), 4);
+        return;
+    }
+    if is_tagged(val) {
+        print_i64_nn(untag(val));
+        return;
+    }
+    
+    // If it's not on the heap, it's a string literal or global variable
+    if !is_heap_ptr(val) {
+        let len = vajra_strlen(val as *const u8);
+        print_raw(val as *const u8, len);
+        return;
+    }
+    
+    let p = val as *const u64;
+    let first = *p;
+    if first == 1 || first == 1_i64 as u64 || first == -1_i64 as u64 {
+        let b = val as *const BigInt;
+        print_bigint_nn(b);
+        return;
+    }
+    
+    if is_valid_class_name_ptr(first as *const u8) {
+        print_raw(b"[Object ".as_ptr(), 8);
+        let len = vajra_strlen(first as *const u8);
+        print_raw(first as *const u8, len);
+        print_raw(b"]".as_ptr(), 1);
+        return;
+    }
+    
+    let len = vajra_strlen(val as *const u8);
+    print_raw(val as *const u8, len);
+}
+
 
 #[cfg(target_os = "windows")]
 #[no_mangle]
@@ -515,7 +597,9 @@ pub unsafe extern "C" fn vajra_readline() -> *mut u8 {
 #[cfg(target_os = "windows")]
 #[no_mangle]
 pub unsafe extern "C" fn vajra_runtime_init() {
+    print_raw(b"DBG: vajra_runtime_init started\n\0".as_ptr(), 33);
     SetConsoleOutputCP(65001);
+
     G_STDOUT = GetStdHandle(-11);
     
     // Initialize main thread state
@@ -532,6 +616,7 @@ pub unsafe extern "C" fn vajra_runtime_init() {
     *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
     *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
     *G_HEAP_BUMPS.as_mut_ptr().add(0) = 0;
+    print_raw(b"DBG: vajra_runtime_init finished\n\0".as_ptr(), 34);
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1349,24 +1434,120 @@ pub unsafe extern "C" fn vajra_rem(a: u64, b: u64) -> u64 {
     r as u64
 }
 
+unsafe fn is_valid_bigint(val: u64) -> bool {
+    if !is_heap_ptr(val) {
+        return false;
+    }
+    if (val & 7) != 0 {
+        return false;
+    }
+    let header = (val - 8) as *const AllocHeader;
+    if (*header).size < core::mem::size_of::<BigInt>() as u32 {
+        return false;
+    }
+    let first = *(val as *const u64) as i64;
+    first == 1 || first == -1
+}
+
+unsafe fn get_string_ptr(val: u64) -> *const u8 {
+    if val == 0 {
+        return core::ptr::null();
+    }
+    if is_tagged(val) {
+        return core::ptr::null();
+    }
+    if is_heap_ptr(val) {
+        if is_valid_bigint(val) {
+            return core::ptr::null();
+        }
+        let header = (val - 8) as *const AllocHeader;
+        if (*header).size >= 8 {
+            let first = *(val as *const u64);
+            if is_valid_class_name_ptr(first as *const u8) {
+                return core::ptr::null();
+            }
+        }
+        return val as *const u8;
+    }
+    val as *const u8
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn vajra_cmp(a: u64, b: u64) -> i64 {
+    if a == b {
+        return 0;
+    }
     if is_tagged(a) && is_tagged(b) {
         let va = untag(a);
         let vb = untag(b);
         if va < vb { -1 } else if va > vb { 1 } else { 0 }
     } else {
-        let bigint_a = if is_tagged(a) {
-            bigint_from_i64(untag(a))
+        let is_a_num = is_tagged(a) || is_valid_bigint(a);
+        let is_b_num = is_tagged(b) || is_valid_bigint(b);
+        
+        if is_a_num && is_b_num {
+            let bigint_a = if is_tagged(a) {
+                bigint_from_i64(untag(a))
+            } else {
+                a as *mut BigInt
+            };
+            let bigint_b = if is_tagged(b) {
+                bigint_from_i64(untag(b))
+            } else {
+                b as *mut BigInt
+            };
+            bigint_cmp(bigint_a, bigint_b)
         } else {
-            a as *mut BigInt
-        };
-        let bigint_b = if is_tagged(b) {
-            bigint_from_i64(untag(b))
+            if a == 0 || b == 0 {
+                return if a == 0 { -1 } else { 1 };
+            }
+            let str_a = get_string_ptr(a);
+            let str_b = get_string_ptr(b);
+            if str_a.is_null() || str_b.is_null() {
+                if a < b { -1 } else { 1 }
+            } else {
+                let mut i = 0;
+                loop {
+                    let ca = *str_a.add(i);
+                    let cb = *str_b.add(i);
+                    if ca != cb {
+                        return if ca < cb { -1 } else { 1 };
+                    }
+                    if ca == 0 {
+                        break;
+                    }
+                    i += 1;
+                }
+                0
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn abs(n: i64) -> i64 {
+    if is_tagged(n as u64) {
+        let val = untag(n as u64);
+        let abs_val = if val < 0 {
+            if val == i64::MIN {
+                i64::MAX
+            } else {
+                -val
+            }
         } else {
-            b as *mut BigInt
+            val
         };
-        bigint_cmp(bigint_a, bigint_b)
+        tag(abs_val) as i64
+    } else {
+        if n < 0 {
+            if n == i64::MIN {
+                i64::MAX
+            } else {
+                -n
+            }
+        } else {
+            n
+        }
     }
 }
 
@@ -1417,4 +1598,518 @@ pub unsafe extern "C" fn vajra_untag(a: u64) -> i64 {
         }
     }
 }
+
+// === Math, Random, DateTime, and Socket Runtime Features ===
+
+#[repr(C)]
+struct timespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn LoadLibraryA(lpLibFileName: *const u8) -> *mut c_void;
+    fn GetProcAddress(hModule: *mut c_void, lpProcName: *const u8) -> *mut c_void;
+}
+
+#[cfg(target_os = "windows")]
+static mut G_WINSOCK_INITIALIZED: bool = false;
+#[cfg(target_os = "windows")]
+static mut G_WSA_STARTUP: Option<unsafe extern "system" fn(u16, *mut u8) -> i32> = None;
+#[cfg(target_os = "windows")]
+static mut G_SOCKET: Option<unsafe extern "system" fn(i32, i32, i32) -> usize> = None;
+#[cfg(target_os = "windows")]
+static mut G_CONNECT: Option<unsafe extern "system" fn(usize, *const u8, i32) -> i32> = None;
+#[cfg(target_os = "windows")]
+static mut G_SEND: Option<unsafe extern "system" fn(usize, *const u8, i32, i32) -> i32> = None;
+#[cfg(target_os = "windows")]
+static mut G_RECV: Option<unsafe extern "system" fn(usize, *mut u8, i32, i32) -> i32> = None;
+#[cfg(target_os = "windows")]
+static mut G_CLOSESOCKET: Option<unsafe extern "system" fn(usize) -> i32> = None;
+
+#[cfg(target_os = "windows")]
+unsafe fn ensure_winsock() {
+    if G_WINSOCK_INITIALIZED { return; }
+    let ws2 = LoadLibraryA(b"ws2_32.dll\0".as_ptr());
+    if ws2.is_null() {
+        vajra_throw(b"Failed to load ws2_32.dll\0".as_ptr());
+    }
+    G_WSA_STARTUP = core::mem::transmute(GetProcAddress(ws2, b"WSAStartup\0".as_ptr()));
+    G_SOCKET = core::mem::transmute(GetProcAddress(ws2, b"socket\0".as_ptr()));
+    G_CONNECT = core::mem::transmute(GetProcAddress(ws2, b"connect\0".as_ptr()));
+    G_SEND = core::mem::transmute(GetProcAddress(ws2, b"send\0".as_ptr()));
+    G_RECV = core::mem::transmute(GetProcAddress(ws2, b"recv\0".as_ptr()));
+    G_CLOSESOCKET = core::mem::transmute(GetProcAddress(ws2, b"closesocket\0".as_ptr()));
+
+    let mut wsa_data = [0u8; 512];
+    if let Some(wsa_startup) = G_WSA_STARTUP {
+        wsa_startup(0x0202, wsa_data.as_mut_ptr());
+    }
+    G_WINSOCK_INITIALIZED = true;
+}
+
+#[cfg(target_os = "windows")]
+static mut G_GET_SYSTEM_TIME_AS_FILE_TIME: Option<unsafe extern "system" fn(*mut u64)> = None;
+
+#[cfg(target_os = "windows")]
+unsafe fn ensure_datetime() {
+    if G_GET_SYSTEM_TIME_AS_FILE_TIME.is_some() { return; }
+    let k32 = LoadLibraryA(b"kernel32.dll\0".as_ptr());
+    G_GET_SYSTEM_TIME_AS_FILE_TIME = core::mem::transmute(GetProcAddress(k32, b"GetSystemTimeAsFileTime\0".as_ptr()));
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_socket(domain: i32, ty: i32, protocol: i32) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 41, // SYS_socket
+        in("rdi") domain,
+        in("rsi") ty,
+        in("rdx") protocol,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_connect(fd: isize, addr: *const u8, addrlen: u32) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 42, // SYS_connect
+        in("rdi") fd,
+        in("rsi") addr,
+        in("rdx") addrlen,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_send(fd: isize, buf: *const u8, len: usize, flags: i32) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 44, // SYS_sendto
+        in("rdi") fd,
+        in("rsi") buf,
+        in("rdx") len,
+        in("r10") flags,
+        in("r8") 0,
+        in("r9") 0,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_recv(fd: isize, buf: *mut u8, len: usize, flags: i32) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 45, // SYS_recvfrom
+        in("rdi") fd,
+        in("rsi") buf,
+        in("rdx") len,
+        in("r10") flags,
+        in("r8") 0,
+        in("r9") 0,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_close(fd: isize) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 3, // SYS_close
+        in("rdi") fd,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_clock_gettime(clk_id: i32, tp: *mut timespec) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 228, // SYS_clock_gettime
+        in("rdi") clk_id,
+        in("rsi") tp,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+unsafe fn parse_ipv4_to_bytes(ip_str: *const u8) -> [u8; 4] {
+    let mut bytes = [0u8; 4];
+    let mut current_val = 0u8;
+    let mut byte_idx = 0;
+    let mut i = 0;
+    loop {
+        let c = *ip_str.add(i);
+        if c == 0 {
+            if byte_idx < 4 {
+                bytes[byte_idx] = current_val;
+            }
+            break;
+        } else if c == b'.' {
+            if byte_idx < 4 {
+                bytes[byte_idx] = current_val;
+                byte_idx += 1;
+                current_val = 0;
+            }
+        } else if c >= b'0' && c <= b'9' {
+            current_val = current_val.wrapping_mul(10).wrapping_add(c - b'0');
+        }
+        i += 1;
+    }
+    bytes
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_socket_create() -> u64 {
+    #[cfg(target_os = "windows")]
+    {
+        ensure_winsock();
+        if let Some(socket_fn) = G_SOCKET {
+            let sock = socket_fn(2, 1, 6);
+            if sock == usize::MAX {
+                return tag(-1);
+            }
+            return tag(sock as i64);
+        }
+        tag(-1)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let sock = sys_socket(2, 1, 6);
+            tag(sock as i64)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            tag(-1)
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_socket_connect(sock_val: u64, ip_val: u64, port_val: u64) -> u64 {
+    let sock = untag(sock_val) as usize;
+    let ip_ptr = ip_val as *const u8;
+    let port = untag(port_val) as u32;
+
+    let bytes = parse_ipv4_to_bytes(ip_ptr);
+
+    let mut addr = [0u8; 16];
+    let family_val = 2u16;
+    core::ptr::copy_nonoverlapping(&family_val as *const u16 as *const u8, addr.as_mut_ptr(), 2);
+    let port_bytes = [(port >> 8) as u8, (port & 0xFF) as u8];
+    core::ptr::copy_nonoverlapping(port_bytes.as_ptr(), addr.as_mut_ptr().add(2), 2);
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), addr.as_mut_ptr().add(4), 4);
+
+    #[cfg(target_os = "windows")]
+    {
+        ensure_winsock();
+        if let Some(connect_fn) = G_CONNECT {
+            let res = connect_fn(sock, addr.as_ptr(), 16);
+            return tag(res as i64);
+        }
+        tag(-1)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let res = sys_connect(sock as isize, addr.as_ptr(), 16);
+            tag(res as i64)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            tag(-1)
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_socket_send(sock_val: u64, data_val: u64) -> u64 {
+    let sock = untag(sock_val) as usize;
+    let data_ptr = data_val as *const u8;
+    let len = vajra_strlen(data_ptr);
+
+    #[cfg(target_os = "windows")]
+    {
+        ensure_winsock();
+        if let Some(send_fn) = G_SEND {
+            let res = send_fn(sock, data_ptr, len as i32, 0);
+            return tag(res as i64);
+        }
+        tag(-1)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let res = sys_send(sock as isize, data_ptr, len, 0);
+            tag(res as i64)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            tag(-1)
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_socket_recv(sock_val: u64, len_val: u64) -> u64 {
+    let sock = untag(sock_val) as usize;
+    let len = untag(len_val) as usize;
+
+    let buf = vajra_alloc(len + 1);
+    let mut bytes_received: isize = -1;
+
+    #[cfg(target_os = "windows")]
+    {
+        ensure_winsock();
+        if let Some(recv_fn) = G_RECV {
+            let res = recv_fn(sock, buf, len as i32, 0);
+            bytes_received = res as isize;
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            bytes_received = sys_recv(sock as isize, buf, len, 0);
+        }
+    }
+
+    if bytes_received <= 0 {
+        *buf = 0;
+    } else {
+        *buf.add(bytes_received as usize) = 0;
+    }
+    buf as u64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_socket_close(sock_val: u64) -> u64 {
+    let sock = untag(sock_val) as usize;
+
+    #[cfg(target_os = "windows")]
+    {
+        ensure_winsock();
+        if let Some(close_fn) = G_CLOSESOCKET {
+            let res = close_fn(sock);
+            return tag(res as i64);
+        }
+        tag(-1)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let res = sys_close(sock as isize);
+            tag(res as i64)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            tag(-1)
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_datetime_now() -> u64 {
+    #[cfg(target_os = "windows")]
+    {
+        ensure_datetime();
+        if let Some(sys_time_fn) = G_GET_SYSTEM_TIME_AS_FILE_TIME {
+            let mut file_time = 0u64;
+            sys_time_fn(&mut file_time);
+            let unix_seconds = (file_time - 116444736000000000) / 10000000;
+            return tag(unix_seconds as i64);
+        }
+        tag(0)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut tp = timespec { tv_sec: 0, tv_nsec: 0 };
+            sys_clock_gettime(0, &mut tp);
+            tag(tp.tv_sec)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            tag(0)
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_datetime_epoch() -> u64 {
+    vajra_datetime_now()
+}
+
+// --- Math and Random ---
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_math_sin(x: f64) -> f64 {
+    let pi = 3.141592653589793;
+    let mut z = x % (2.0 * pi);
+    if z < -pi { z += 2.0 * pi; }
+    if z > pi { z -= 2.0 * pi; }
+    if z < -pi / 2.0 {
+        z = -pi - z;
+    } else if z > pi / 2.0 {
+        z = pi - z;
+    }
+    let z2 = z * z;
+    z * (1.0 - z2 * (1.0 / 6.0 - z2 * (1.0 / 120.0 - z2 * (1.0 / 5040.0 - z2 / 362880.0))))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_math_cos(x: f64) -> f64 {
+    let pi = 3.141592653589793;
+    vajra_math_sin(x + pi / 2.0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_math_tan(x: f64) -> f64 {
+    let s = vajra_math_sin(x);
+    let c = vajra_math_cos(x);
+    if c.abs() < 1e-15 { 0.0 } else { s / c }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_math_sqrt(x: f64) -> f64 {
+    let ret: f64;
+    #[cfg(target_arch = "x86_64")]
+    core::arch::asm!(
+        "sqrtsd {}, {}",
+        out(xmm_reg) ret,
+        in(xmm_reg) x
+    );
+    #[cfg(not(target_arch = "x86_64"))]
+    { ret = x; }
+    ret
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_math_abs(x: f64) -> f64 {
+    if x < 0.0 { -x } else { x }
+}
+
+unsafe fn vajra_math_ln(x: f64) -> f64 {
+    if x <= 0.0 { return -1e300; }
+    let mut val = x;
+    let mut k = 0.0;
+    while val > 1.5 {
+        val /= 2.718281828459045;
+        k += 1.0;
+    }
+    while val < 0.5 {
+        val *= 2.718281828459045;
+        k -= 1.0;
+    }
+    let z = val - 1.0;
+    let z2 = z * z;
+    let z3 = z2 * z;
+    let z4 = z3 * z;
+    let z5 = z4 * z;
+    let approx = z - z2/2.0 + z3/3.0 - z4/4.0 + z5/5.0;
+    approx + k
+}
+
+unsafe fn vajra_math_exp(x: f64) -> f64 {
+    let mut sum = 1.0;
+    let mut term = 1.0;
+    for i in 1..20 {
+        term *= x / i as f64;
+        sum += term;
+    }
+    sum
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_math_log(x: f64) -> f64 {
+    vajra_math_ln(x)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_math_pow(x: f64, y: f64) -> f64 {
+    let y_int = y as i32;
+    if (y - y_int as f64).abs() < 1e-9 {
+        let mut res = 1.0;
+        let mut base = x;
+        let mut exp = if y_int < 0 { -y_int } else { y_int };
+        while exp > 0 {
+            if exp & 1 == 1 {
+                res *= base;
+            }
+            base *= base;
+            exp >>= 1;
+        }
+        if y_int < 0 { 1.0 / res } else { res }
+    } else {
+        if x <= 0.0 { return 0.0; }
+        let lnx = vajra_math_ln(x);
+        vajra_math_exp(y * lnx)
+    }
+}
+
+static mut G_RANDOM_STATE: u64 = 0x123456789abcdef;
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_random_int(min: i64, max: i64) -> i64 {
+    let mut x = G_RANDOM_STATE;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    G_RANDOM_STATE = x;
+    if min >= max { return min; }
+    let range = (max - min) as u64;
+    let val = x % range;
+    min + val as i64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_random_float() -> f64 {
+    let mut x = G_RANDOM_STATE;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    G_RANDOM_STATE = x;
+    (x & 0xFFFFFFFFFFFF) as f64 / 281474976710655.0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fmod(x: f64, y: f64) -> f64 {
+    if y == 0.0 {
+        return f64::NAN;
+    }
+    let quot = (x / y) as i64;
+    x - (quot as f64) * y
+}
+
 

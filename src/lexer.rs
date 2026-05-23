@@ -352,6 +352,40 @@ lazy_static! {
         m.insert("반환",       TokenKind::Return);
         m.insert("출력",       TokenKind::Identifier("print".to_string()));
 
+        // ── Hinglish ────────────────────────────────────────────────────────
+        m.insert("rakho",     TokenKind::Let);
+        m.insert("lelo",      TokenKind::Let);
+        m.insert("agar",      TokenKind::If);
+        m.insert("warna",     TokenKind::Else);
+        m.insert("nahi_to",   TokenKind::Else);
+        m.insert("bhejo",     TokenKind::Return);
+        m.insert("de_do",     TokenKind::Return);
+        m.insert("jab_tak",   TokenKind::While);
+        m.insert("dikhao",    TokenKind::Identifier("print".to_string()));
+        m.insert("likho",     TokenKind::Identifier("print".to_string()));
+        m.insert("class",     TokenKind::Class);
+
+        // ── Bhojpuri (भोजपुरी) ────────────────────────────────────────────────
+        m.insert("कारज",      TokenKind::Function);
+        m.insert("करम",       TokenKind::Function);
+        m.insert("धरऽ",       TokenKind::Let);
+        m.insert("मानऽ",      TokenKind::Let);
+        m.insert("जात",       TokenKind::Class);
+        m.insert("जदि",       TokenKind::If);
+        m.insert("ना_त",      TokenKind::Else);
+        m.insert("लौटावऽ",    TokenKind::Return);
+        m.insert("लिखऽ",      TokenKind::Identifier("print".to_string()));
+        m.insert("देखावऽ",    TokenKind::Identifier("print".to_string()));
+
+        // ── Haryanvi (हरियाणवी) ──────────────────────────────────────────────
+        m.insert("काम",       TokenKind::Function);
+        m.insert("धरदे",      TokenKind::Let);
+        m.insert("इब",        TokenKind::Let);
+        m.insert("जे",        TokenKind::If);
+        m.insert("ना_त",      TokenKind::Else);
+        m.insert("फेर_दे",    TokenKind::Return);
+        m.insert("छाप",       TokenKind::Identifier("print".to_string()));
+
         m
     };
 }

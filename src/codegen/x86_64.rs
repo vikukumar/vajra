@@ -367,6 +367,20 @@ impl<'m> X86_64Codegen<'m> {
         Self { module, global_offsets: HashMap::new() }
     }
 
+    fn is_float_returning(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "vajra_math_sin"
+                | "vajra_math_cos"
+                | "vajra_math_tan"
+                | "vajra_math_sqrt"
+                | "vajra_math_abs"
+                | "vajra_math_log"
+                | "vajra_math_pow"
+                | "vajra_random_float"
+        )
+    }
+
     fn load_operands(&self, fg: &mut FuncGen, a: ValId, b: ValId) -> Result<()> {
         let b_in_rax = fg.reg_val.get(&Reg::Rax) == Some(&b) || 
             matches!(fg.val_locs.get(&b), Some(ValueLoc::Reg(Reg::Rax)));
@@ -390,8 +404,14 @@ impl<'m> X86_64Codegen<'m> {
         let mut obj = Object::new(binary_format, arch, Endianness::Little);
 
         let rdata_section = obj.section_id(StandardSection::ReadOnlyData);
+        let data_section = obj.section_id(StandardSection::Data);
         for global in &self.module.globals {
-            let offset = obj.append_section_data(rdata_section, &global.data, 1);
+            let section = if global.name == "vajra_global_instance" {
+                data_section
+            } else {
+                rdata_section
+            };
+            let offset = obj.append_section_data(section, &global.data, 8);
             self.global_offsets.insert(global.name.clone(), offset);
             obj.add_symbol(Symbol {
                 name: global.name.as_bytes().to_vec(),
@@ -400,7 +420,7 @@ impl<'m> X86_64Codegen<'m> {
                 kind: SymbolKind::Data,
                 scope: SymbolScope::Compilation,
                 weak: false,
-                section: SymbolSection::Section(rdata_section),
+                section: SymbolSection::Section(section),
                 flags: object::SymbolFlags::None,
             });
         }
@@ -751,12 +771,34 @@ impl<'m> X86_64Codegen<'m> {
                 fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::Call(dst, name, args) => {
-                let arg_regs = get_arg_regs();
-                for (i, &arg_id) in args.iter().enumerate() {
-                    if i < arg_regs.len() {
-                        self.load_into(fg, arg_id, arg_regs[i])?;
+                let is_float_ret = self.is_float_returning(name);
+                
+                // Load arguments based on float type
+                if name == "vajra_math_pow" {
+                    if args.len() >= 2 {
+                        self.load_f64_into(fg, args[0], Reg::Xmm0)?;
+                        self.load_f64_into(fg, args[1], Reg::Xmm1)?;
+                    }
+                } else if name == "vajra_math_sin"
+                    || name == "vajra_math_cos"
+                    || name == "vajra_math_tan"
+                    || name == "vajra_math_sqrt"
+                    || name == "vajra_math_abs"
+                    || name == "vajra_math_log"
+                    || name == "vajra_print_f64"
+                {
+                    if args.len() >= 1 {
+                        self.load_f64_into(fg, args[0], Reg::Xmm0)?;
+                    }
+                } else {
+                    let arg_regs = get_arg_regs();
+                    for (i, &arg_id) in args.iter().enumerate() {
+                        if i < arg_regs.len() {
+                            self.load_into(fg, arg_id, arg_regs[i])?;
+                        }
                     }
                 }
+                
                 fg.clear_cache();
                 #[cfg(target_os = "windows")]
                 fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32 (shadow space)
@@ -766,10 +808,16 @@ impl<'m> X86_64Codegen<'m> {
                 fg.relocs.push(PendingReloc { offset: patch as u64, symbol: name.clone(), addend: -4 });
                 #[cfg(target_os = "windows")]
                 fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                
                 let off = fg.alloc_stack(8);
-                emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-                fg.val_locs.insert(*dst, ValueLoc::Stack(off));
-                fg.set_reg(Reg::Rax, *dst);
+                if is_float_ret {
+                    emit_movq_xmm_to_mem(&mut fg.code, Reg::Xmm0, off);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                } else {
+                    emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
+                    fg.val_locs.insert(*dst, ValueLoc::Stack(off));
+                    fg.set_reg(Reg::Rax, *dst);
+                }
             }
             IrInstr::ZExt(dst, src) | IrInstr::SExt(dst, src) | IrInstr::Trunc(dst, src, _) | IrInstr::BitCast(dst, src, _) => {
                 self.load_into(fg, *src, Reg::Rax)?;

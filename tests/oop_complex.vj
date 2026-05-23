@@ -1,0 +1,40 @@
+# tests/oop_complex.vj
+# A comprehensive integration test for Vajra multi-dialect OOP and libraries
+
+class Animal:
+    fn init(name):
+        self.name = name
+
+    fn speak():
+        dikhao("Animal speaks")
+
+class Dog : Animal:
+    fn speak():
+        dikhao(self.name)
+        dikhao("barks")
+
+@main
+कार्या मुख्य():
+    # Test OOP and inheritance
+    rakho d = new Dog("Tommy")
+    d.speak()
+
+    # Test Math library
+    rakho s = Math.sin(0.0)
+    dikhao("Sin of 0:")
+    dikhao(s)
+
+    # Test Random library
+    rakho r = Random.int(100, 101)
+    dikhao("Random between 100 and 101:")
+    dikhao(r)
+
+    # Test DateTime library
+    rakho t = DateTime.now()
+    dikhao("Epoch now is positive:")
+    dikhao(t > 0)
+
+    # Test Global instance
+    Global.app_name = "VajraApp"
+    dikhao("Global app name:")
+    dikhao(Global.app_name)

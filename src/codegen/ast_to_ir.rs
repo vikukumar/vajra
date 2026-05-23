@@ -13,6 +13,8 @@ pub struct AstToIr {
     /// Global string counter
     str_count: u32,
     loop_count: u32,
+    field_indices: HashMap<String, usize>,
+    classes: HashMap<String, Statement>,
 }
 
 impl AstToIr {
@@ -22,10 +24,60 @@ impl AstToIr {
             func_sigs: HashMap::new(),
             str_count: 0,
             loop_count: 0,
+            field_indices: HashMap::new(),
+            classes: HashMap::new(),
         }
     }
 
     pub fn lower_program(mut self, program: &Program) -> Result<IrModule> {
+        let mut collector = OopMetadataCollector {
+            class_defs: HashMap::new(),
+            field_names: std::collections::BTreeSet::new(),
+            method_names: std::collections::BTreeSet::new(),
+        };
+        collector.collect(program);
+
+        // Always register Socket and GlobalClass fields and methods
+        collector.field_names.insert("_handle".to_string());
+        collector.method_names.insert("connect".to_string());
+        collector.method_names.insert("send".to_string());
+        collector.method_names.insert("recv".to_string());
+        collector.method_names.insert("close".to_string());
+
+        // Build field indices
+        for (i, name) in collector.field_names.into_iter().enumerate() {
+            self.field_indices.insert(name, i);
+        }
+        self.classes = collector.class_defs;
+
+        // Insert mock Socket definition
+        let socket_class = Statement::Class {
+            name: "Socket".to_string(),
+            fields: vec![("_handle".to_string(), VajraType::I64)],
+            methods: vec![
+                Statement::Method { access: AccessModifier::Public, name: "connect".to_string(), params: vec![Param { name: "ip".to_string(), ty: VajraType::Str }, Param { name: "port".to_string(), ty: VajraType::I64 }], body: vec![], return_type: VajraType::I64 },
+                Statement::Method { access: AccessModifier::Public, name: "send".to_string(), params: vec![Param { name: "data".to_string(), ty: VajraType::Str }], body: vec![], return_type: VajraType::I64 },
+                Statement::Method { access: AccessModifier::Public, name: "recv".to_string(), params: vec![Param { name: "len".to_string(), ty: VajraType::I64 }], body: vec![], return_type: VajraType::Str },
+                Statement::Method { access: AccessModifier::Public, name: "close".to_string(), params: vec![], body: vec![], return_type: VajraType::I64 },
+            ],
+            base: None,
+        };
+        self.classes.insert("Socket".to_string(), socket_class);
+
+        // Add G_GLOBAL_INSTANCE pointer variable in globals
+        self.module.globals.push(IrGlobal {
+            name: "vajra_global_instance".to_string(),
+            data: vec![0; 8],
+            is_string: false,
+        });
+
+        // Add Socket class name global string
+        self.module.globals.push(IrGlobal {
+            name: "Socket".to_string(),
+            data: b"Socket\0".to_vec(),
+            is_string: true,
+        });
+
         // First pass: collect all function signatures for forward-call resolution
         for stmt in &program.statements {
             if let Statement::Function { name, params, is_extern, .. } = stmt {
@@ -36,6 +88,18 @@ impl AstToIr {
         // Second pass: lower each statement
         for stmt in &program.statements {
             self.lower_top_level(stmt)?;
+        }
+
+        // Compile socket methods
+        self.compile_socket_method_connect()?;
+        self.compile_socket_method_send()?;
+        self.compile_socket_method_recv()?;
+        self.compile_socket_method_close()?;
+
+        // Generate dispatchers for each unique method name
+        let method_names = collector.method_names.clone();
+        for method_name in &method_names {
+            self.generate_dispatcher(method_name)?;
         }
 
         Ok(self.module)
@@ -57,9 +121,12 @@ impl AstToIr {
             Statement::Function { name, params, body, is_main, is_extern, .. } => {
                 self.lower_function(name, params, body, *is_main, *is_extern)?;
             }
-            Statement::Class { name: _, methods, .. } => {
+            Statement::Class { name, methods, .. } => {
+                let mut bytes = name.as_bytes().to_vec();
+                bytes.push(0);
+                self.module.globals.push(IrGlobal { name: name.clone(), data: bytes, is_string: true });
                 for m in methods {
-                    self.lower_top_level(m)?;
+                    self.lower_class_method(name, m)?;
                 }
             }
             Statement::Method { name, params, body, .. } => {
@@ -67,6 +134,21 @@ impl AstToIr {
             }
             Statement::Import(_) => {} // resolved by main driver
             _ => {} // top-level expressions ignored
+        }
+        Ok(())
+    }
+
+    fn lower_class_method(&mut self, class_name: &str, method: &Statement) -> Result<()> {
+        match method {
+            Statement::Method { name, params, body, .. }
+            | Statement::Function { name, params, body, .. } => {
+                let prefixed_name = format!("{}_{}", class_name, name);
+                let mut prepended_params = vec![Param { name: "this".to_string(), ty: VajraType::Ptr(Box::new(VajraType::Void)) }];
+                prepended_params.extend(params.clone());
+                
+                self.lower_function(&prefixed_name, &prepended_params, body, false, false)?;
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -115,9 +197,29 @@ impl AstToIr {
             let _ = i;
         }
 
-        // Special: if is_main, call vajra_runtime_init first
+        // Special: if is_main, call vajra_runtime_init first and allocate Global
         if is_main {
             builder.call("vajra_runtime_init", vec![]);
+            
+            let size_bytes = (self.field_indices.len() + 1) * 8;
+            let size_val = builder.const_i64(size_bytes as i64);
+            let obj_ptr = builder.call("vajra_alloc", vec![size_val]);
+            
+            let class_name_ptr = builder.fresh_val();
+            let gname = self.intern_string("GlobalClass");
+            builder.emit(IrInstr::StrPtr(class_name_ptr, gname));
+            builder.emit(IrInstr::Store(class_name_ptr, obj_ptr));
+            
+            let tagged_zero = builder.const_i64(1);
+            for &index in self.field_indices.values() {
+                let index_val = builder.const_i64((index + 1) as i64);
+                let field_ptr = builder.gep(obj_ptr, index_val);
+                builder.emit(IrInstr::Store(tagged_zero, field_ptr));
+            }
+            
+            let global_ptr_var = builder.fresh_val();
+            builder.emit(IrInstr::StrPtr(global_ptr_var, "vajra_global_instance".to_string()));
+            builder.emit(IrInstr::Store(obj_ptr, global_ptr_var));
         }
 
         // Lower body
@@ -135,6 +237,8 @@ impl AstToIr {
             captured_ptrs: HashMap::new(),
             loop_count: &mut loop_count,
             in_parallel_loop: false,
+            field_indices: &self.field_indices,
+            classes: &self.classes,
         };
         for stmt in body {
             fc.lower_stmt(stmt)?;
@@ -187,9 +291,48 @@ struct FuncContext<'a> {
     captured_ptrs: HashMap<String, ValId>,
     loop_count: &'a mut u32,
     in_parallel_loop: bool,
+    field_indices: &'a HashMap<String, usize>,
+    classes: &'a HashMap<String, Statement>,
 }
 
 impl<'a> FuncContext<'a> {
+    fn resolve_method_impl(&self, class_name: &str, method_name: &str) -> Option<String> {
+        let mut curr = Some(class_name.to_string());
+        while let Some(cls_name) = curr {
+            if let Some(Statement::Class { methods, base, .. }) = self.classes.get(&cls_name) {
+                for m in methods {
+                    let mname = match m {
+                        Statement::Method { name, .. } => name.clone(),
+                        Statement::Function { name, .. } => name.clone(),
+                        _ => continue,
+                    };
+                    if mname == method_name {
+                        return Some(cls_name);
+                    }
+                }
+                curr = base.clone();
+            } else {
+                break;
+            }
+        }
+        None
+    }
+
+    fn get_method_param_count(&self, class_name: &str, method_name: &str) -> usize {
+        if let Some(Statement::Class { methods, .. }) = self.classes.get(class_name) {
+            for m in methods {
+                let (mname, params) = match m {
+                    Statement::Method { name, params, .. } => (name, params),
+                    Statement::Function { name, params, .. } => (name, params),
+                    _ => continue,
+                };
+                if mname == method_name {
+                    return params.len();
+                }
+            }
+        }
+        0
+    }
     fn intern_str(&mut self, s: &str) -> String {
         let name = format!(".str{}", self.str_count);
         self.str_count += 1;
@@ -568,6 +711,8 @@ impl<'a> FuncContext<'a> {
                             captured_ptrs,
                             loop_count: self.loop_count,
                             in_parallel_loop: true,
+                            field_indices: self.field_indices,
+                            classes: self.classes,
                         };
                         
                         // Lower body statements (except the final increment)
@@ -791,7 +936,14 @@ impl<'a> FuncContext<'a> {
                 }
             },
             Expression::Identifier(name) => {
-                if let Some(&ptr) = self.captured_ptrs.get(name) {
+                if name == "Global" {
+                    let global_ptr_var = self.builder.fresh_val();
+                    self.builder.emit(IrInstr::StrPtr(global_ptr_var, "vajra_global_instance".to_string()));
+                    let global_val = self.builder.load(global_ptr_var, IrType::I64);
+                    Ok(global_val)
+                } else if name == "Math" || name == "Random" || name == "DateTime" {
+                    Ok(self.builder.const_i64(1)) // placeholder tagged 0
+                } else if let Some(&ptr) = self.captured_ptrs.get(name) {
                     Ok(self.builder.load(ptr, IrType::I64))
                 } else {
                     match self.builder.named_slots.get(name).cloned() {
@@ -953,13 +1105,81 @@ impl<'a> FuncContext<'a> {
                 }
             }
             Expression::MethodCall { receiver, method, args } => {
-                // For now: treat as function call with receiver as first arg
-                let recv = self.lower_expr(receiver)?;
-                let mut compiled_args = vec![recv];
-                for a in args {
-                    compiled_args.push(self.lower_expr(a)?);
+                if let Expression::Identifier(ref name) = **receiver {
+                    if name == "Math" {
+                        let mut compiled_args = Vec::new();
+                        for a in args {
+                            compiled_args.push(self.lower_expr(a)?);
+                        }
+                        let runtime_fn = match method.as_str() {
+                            "sin" => "vajra_math_sin",
+                            "cos" => "vajra_math_cos",
+                            "tan" => "vajra_math_tan",
+                            "sqrt" => "vajra_math_sqrt",
+                            "abs" => "vajra_math_abs",
+                            "log" => "vajra_math_log",
+                            "pow" => "vajra_math_pow",
+                            _ => bail!("Unknown Math method: {}", method),
+                        };
+                        return Ok(self.builder.call(runtime_fn, compiled_args));
+                    } else if name == "Random" {
+                        let mut compiled_args = Vec::new();
+                        for a in args {
+                            compiled_args.push(self.lower_expr(a)?);
+                        }
+                        let runtime_fn = match method.as_str() {
+                            "int" | "nextInt" => "vajra_random_int",
+                            "float" | "nextFloat" => "vajra_random_float",
+                            _ => bail!("Unknown Random method: {}", method),
+                        };
+                        return Ok(self.builder.call(runtime_fn, compiled_args));
+                    } else if name == "DateTime" {
+                        let mut compiled_args = Vec::new();
+                        for a in args {
+                            compiled_args.push(self.lower_expr(a)?);
+                        }
+                        let runtime_fn = match method.as_str() {
+                            "now" | "epoch" => "vajra_datetime_now",
+                            _ => bail!("Unknown DateTime method: {}", method),
+                        };
+                        return Ok(self.builder.call(runtime_fn, compiled_args));
+                    }
                 }
-                Ok(self.builder.call(method.as_str(), compiled_args))
+
+                let recv_type = self.infer_expr_type(receiver);
+                if (recv_type == VajraType::I64 || recv_type == VajraType::Unknown)
+                    && (method == "add" || method == "sub" || method == "mul" || method == "div")
+                {
+                    let recv = self.lower_expr(receiver)?;
+                    let arg = self.lower_expr(&args[0])?;
+                    match method.as_str() {
+                        "add" => Ok(self.builder.add(recv, arg)),
+                        "sub" => Ok(self.builder.sub(recv, arg)),
+                        "mul" => Ok(self.builder.mul(recv, arg)),
+                        "div" => Ok(self.builder.div(recv, arg)),
+                        _ => unreachable!(),
+                    }
+                } else if recv_type == VajraType::F64
+                    && (method == "add" || method == "sub" || method == "mul" || method == "div")
+                {
+                    let recv = self.lower_expr(receiver)?;
+                    let arg = self.lower_expr(&args[0])?;
+                    match method.as_str() {
+                        "add" => Ok(self.builder.fadd(recv, arg)),
+                        "sub" => Ok(self.builder.fsub(recv, arg)),
+                        "mul" => Ok(self.builder.fmul(recv, arg)),
+                        "div" => Ok(self.builder.fdiv(recv, arg)),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    // For now: treat as function call with receiver as first arg
+                    let recv = self.lower_expr(receiver)?;
+                    let mut compiled_args = vec![recv];
+                    for a in args {
+                        compiled_args.push(self.lower_expr(a)?);
+                    }
+                    Ok(self.builder.call(method.as_str(), compiled_args))
+                }
             }
             Expression::Spawn { task } => {
                 // Compile task as a function pointer call
@@ -981,14 +1201,97 @@ impl<'a> FuncContext<'a> {
                     }
                 }
             }
-            Expression::ObjectInstantiation { class_name: _, args: _ } => {
-                // Emit vajra_alloc(size) — struct size to be resolved by typechecker in v0.3
-                let size = self.builder.const_i64(128); // placeholder size
-                Ok(self.builder.call("vajra_alloc", vec![size]))
+            Expression::ObjectInstantiation { class_name, args } => {
+                let size_bytes = (self.field_indices.len() + 1) * 8;
+                let size_val = self.builder.const_i64(size_bytes as i64);
+                let obj_ptr = self.builder.call("vajra_alloc", vec![size_val]);
+                
+                // Store class name pointer at offset 0
+                let class_name_ptr = self.builder.fresh_val();
+                self.builder.emit(IrInstr::StrPtr(class_name_ptr, class_name.clone()));
+                self.builder.emit(IrInstr::Store(class_name_ptr, obj_ptr));
+                
+                // Initialize other fields to tagged 0 (which is 1)
+                let tagged_zero = self.builder.const_i64(1);
+                for &index in self.field_indices.values() {
+                    let index_val = self.builder.const_i64((index + 1) as i64);
+                    let field_ptr = self.builder.gep(obj_ptr, index_val);
+                    self.builder.emit(IrInstr::Store(tagged_zero, field_ptr));
+                }
+                
+                // Special case for Socket
+                if class_name == "Socket" {
+                    if let Some(&index) = self.field_indices.get("_handle") {
+                        let handle_val = self.builder.call("vajra_socket_create", vec![]);
+                        let index_val = self.builder.const_i64((index + 1) as i64);
+                        let field_ptr = self.builder.gep(obj_ptr, index_val);
+                        self.builder.emit(IrInstr::Store(handle_val, field_ptr));
+                    }
+                }
+                
+                // Find constructor
+                if let Some(impl_class) = self.resolve_method_impl(class_name, "init")
+                    .or_else(|| self.resolve_method_impl(class_name, "constructor"))
+                    .or_else(|| self.resolve_method_impl(class_name, class_name)) {
+                    
+                    let constructor_name = if self.resolve_method_impl(class_name, "init").is_some() {
+                        "init"
+                    } else if self.resolve_method_impl(class_name, "constructor").is_some() {
+                        "constructor"
+                    } else {
+                        class_name
+                    };
+                    
+                    let prefixed_name = format!("{}_{}", impl_class, constructor_name);
+                    let mut ctor_args = vec![obj_ptr];
+                    for arg in args {
+                        ctor_args.push(self.lower_expr(arg)?);
+                    }
+                    
+                    let impl_param_count = self.get_method_param_count(&impl_class, constructor_name) + 1;
+                    let mut passed_args = vec![];
+                    for i in 0..impl_param_count {
+                        if i < ctor_args.len() {
+                            passed_args.push(ctor_args[i]);
+                        } else {
+                            passed_args.push(self.builder.const_i64(1)); // default tagged 0
+                        }
+                    }
+                    
+                    let res = self.builder.fresh_val();
+                    self.builder.emit(IrInstr::Call(res, prefixed_name, passed_args));
+                }
+                
+                Ok(obj_ptr)
             }
-            Expression::PropertyAccess { .. } => {
-                // Property access — placeholder (full struct support in v0.3)
-                bail!("Property access not yet fully supported in compiled mode (v0.2). Use function calls instead.")
+            Expression::PropertyAccess { object, property } => {
+                let obj_ptr = self.lower_expr(object)?;
+                let index = *self.field_indices.get(property).ok_or_else(|| {
+                    anyhow::anyhow!("Field '{}' not registered in global field indices", property)
+                })?;
+                let index_val = self.builder.const_i64((index + 1) as i64);
+                let field_ptr = self.builder.gep(obj_ptr, index_val);
+                let val = self.builder.load(field_ptr, IrType::I64);
+                Ok(val)
+            }
+            Expression::PropertyAssign { object, property, value } => {
+                let obj_ptr = self.lower_expr(object)?;
+                let val = self.lower_expr(value)?;
+                let index = *self.field_indices.get(property).ok_or_else(|| {
+                    anyhow::anyhow!("Field '{}' not registered in global field indices", property)
+                })?;
+                let index_val = self.builder.const_i64((index + 1) as i64);
+                let field_ptr = self.builder.gep(obj_ptr, index_val);
+                self.builder.emit(IrInstr::Store(val, field_ptr));
+                Ok(val)
+            }
+            Expression::IndexAssign { object, index, value } => {
+                let ptr = self.lower_expr(object)?;
+                let idx = self.lower_expr(index)?;
+                let val = self.lower_expr(value)?;
+                let elem_ptr = self.builder.gep(ptr, idx);
+                self.builder.emit(IrInstr::Store(val, elem_ptr));
+                Ok(val)
             }
             Expression::Index { object, index } => {
                 let ptr = self.lower_expr(object)?;
@@ -1021,7 +1324,7 @@ impl<'a> FuncContext<'a> {
                 let nl = self.builder.fresh_val();
                 let gname = self.intern_str("\n");
                 self.builder.emit(IrInstr::StrPtr(nl, gname));
-                self.builder.call("vajra_print_str", vec![nl]);
+                self.builder.call("vajra_print_auto", vec![nl]);
             }
             return Ok(self.builder.const_i64(0));
         }
@@ -1030,28 +1333,25 @@ impl<'a> FuncContext<'a> {
             let val = self.lower_expr(arg)?;
             let ty = self.infer_expr_type(arg);
             match ty {
-                VajraType::Str => {
-                    self.builder.call("vajra_print_str", vec![val]);
-                }
                 VajraType::F64 => {
                     self.builder.call("vajra_print_f64", vec![val]);
                 }
                 _ => {
-                    self.builder.call("vajra_print_i64", vec![val]);
+                    self.builder.call("vajra_print_auto", vec![val]);
                 }
             }
             if i < args.len() - 1 {
                 let space = self.builder.fresh_val();
                 let gname = self.intern_str(" ");
                 self.builder.emit(IrInstr::StrPtr(space, gname));
-                self.builder.call("vajra_print_str", vec![space]);
+                self.builder.call("vajra_print_auto", vec![space]);
             }
         }
         if newline {
             let nl = self.builder.fresh_val();
             let gname = self.intern_str("\n");
             self.builder.emit(IrInstr::StrPtr(nl, gname));
-            self.builder.call("vajra_print_str", vec![nl]);
+            self.builder.call("vajra_print_auto", vec![nl]);
         }
         Ok(self.builder.const_i64(0))
     }
@@ -1068,6 +1368,16 @@ impl<'a> FuncContext<'a> {
             },
             Expression::Identifier(name) => {
                 self.var_types.get(name).cloned().unwrap_or(VajraType::Unknown)
+            }
+            Expression::MethodCall { receiver, method, .. } => {
+                if let Expression::Identifier(ref name) = **receiver {
+                    if name == "Math" {
+                        return VajraType::F64;
+                    } else if name == "Random" && (method == "float" || method == "nextFloat") {
+                        return VajraType::F64;
+                    }
+                }
+                VajraType::I64
             }
             Expression::BinaryOp { left, .. } => self.infer_expr_type(left),
             Expression::Cast { target_type, .. } => target_type.clone(),
@@ -1530,3 +1840,360 @@ fn parse_bigint_str(s: &str) -> (Vec<u64>, i32) {
     }
     (digits, sign)
 }
+
+// === OOP Metadata Collection and Dispatcher Generation ===
+
+struct OopMetadataCollector {
+    class_defs: HashMap<String, Statement>,
+    field_names: std::collections::BTreeSet<String>,
+    method_names: std::collections::BTreeSet<String>,
+}
+
+impl OopMetadataCollector {
+    fn collect(&mut self, program: &Program) {
+        for stmt in &program.statements {
+            self.collect_stmt(stmt);
+        }
+    }
+
+    fn collect_stmt(&mut self, stmt: &Statement) {
+        match stmt {
+            Statement::Class { name, fields, methods, .. } => {
+                self.class_defs.insert(name.clone(), stmt.clone());
+                for (fname, _) in fields {
+                    self.field_names.insert(fname.clone());
+                }
+                for m in methods {
+                    match m {
+                        Statement::Method { name: mname, .. }
+                        | Statement::Function { name: mname, .. } => {
+                            self.method_names.insert(mname.clone());
+                        }
+                        _ => {}
+                    }
+                    self.collect_stmt(m);
+                }
+            }
+            Statement::Function { body, .. }
+            | Statement::Method { body, .. }
+            | Statement::While { body, .. }
+            | Statement::For { body, .. } => {
+                for s in body {
+                    self.collect_stmt(s);
+                }
+            }
+            Statement::If { then_body, else_body, .. } => {
+                for s in then_body {
+                    self.collect_stmt(s);
+                }
+                if let Some(eb) = else_body {
+                    for s in eb {
+                        self.collect_stmt(s);
+                    }
+                }
+            }
+            Statement::TryCatch { try_body, catch_body, .. } => {
+                for s in try_body {
+                    self.collect_stmt(s);
+                }
+                for s in catch_body {
+                    self.collect_stmt(s);
+                }
+            }
+            Statement::Let { value, .. } => {
+                self.collect_expr(value);
+            }
+            Statement::Expression(expr) => {
+                self.collect_expr(expr);
+            }
+            Statement::Return(expr) => {
+                self.collect_expr(expr);
+            }
+            Statement::Throw { exception } => {
+                self.collect_expr(exception);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_expr(&mut self, expr: &Expression) {
+        match expr {
+            Expression::PropertyAccess { object, property } => {
+                self.field_names.insert(property.clone());
+                self.collect_expr(object);
+            }
+            Expression::PropertyAssign { object, property, value } => {
+                self.field_names.insert(property.clone());
+                self.collect_expr(object);
+                self.collect_expr(value);
+            }
+            Expression::IndexAssign { object, index, value } => {
+                self.collect_expr(object);
+                self.collect_expr(index);
+                self.collect_expr(value);
+            }
+            Expression::MethodCall { receiver, args, .. } => {
+                self.collect_expr(receiver);
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
+            Expression::ObjectInstantiation { args, .. } => {
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
+            Expression::BinaryOp { left, right, .. } => {
+                self.collect_expr(left);
+                self.collect_expr(right);
+            }
+            Expression::UnaryOp { operand, .. } => {
+                self.collect_expr(operand);
+            }
+            Expression::FunctionCall { args, .. } => {
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
+            Expression::Intrinsic(intrinsic) => {
+                match intrinsic {
+                    Intrinsic::Print(args) | Intrinsic::PrintLn(args) | Intrinsic::SysCall(args) => {
+                        for arg in args {
+                            self.collect_expr(arg);
+                        }
+                    }
+                    Intrinsic::Alloc(expr) | Intrinsic::Free(expr) | Intrinsic::Exit(expr) => {
+                        self.collect_expr(expr);
+                    }
+                    Intrinsic::ReadLine => {}
+                }
+            }
+            Expression::Index { object, index } => {
+                self.collect_expr(object);
+                self.collect_expr(index);
+            }
+            Expression::Cast { value, .. } => {
+                self.collect_expr(value);
+            }
+            Expression::Spawn { task } => {
+                self.collect_expr(task);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl AstToIr {
+    fn generate_dispatcher(&mut self, method_name: &str) -> Result<()> {
+        let mut max_params = 0;
+        for (_, class_stmt) in &self.classes {
+            if let Statement::Class { methods, .. } = class_stmt {
+                for m in methods {
+                    let (mname, params) = match m {
+                        Statement::Method { name, params, .. } => (name, params),
+                        Statement::Function { name, params, .. } => (name, params),
+                        _ => continue,
+                    };
+                    if mname == method_name {
+                        max_params = max_params.max(params.len());
+                    }
+                }
+            }
+        }
+
+        // Build dispatcher signature
+        let mut builder = IrBuilder::new(method_name, IrType::I64);
+        // Param 0: this
+        let this_val = builder.fresh_val();
+        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::I64 });
+        
+        let mut arg_vals = vec![this_val];
+        for i in 0..max_params {
+            let arg_val = builder.fresh_val();
+            builder.function.params.push(IrParam { val: arg_val, name: format!("arg{}", i), ty: IrType::I64 });
+            arg_vals.push(arg_val);
+        }
+
+        // Entry block
+        let entry = builder.fresh_block("entry");
+        builder.switch_to(entry);
+
+        // Load class name pointer from this[0]
+        let class_name_ptr = builder.fresh_val();
+        builder.emit(IrInstr::Load(class_name_ptr, this_val, IrType::I64));
+
+        let mut current_block = entry;
+        for (cname, _class_stmt) in &self.classes {
+            if let Some(impl_class) = self.resolve_method_impl(cname, method_name) {
+                let match_block = builder.fresh_block(&format!("match_{}", cname));
+                let next_block = builder.fresh_block(&format!("next_{}", cname));
+                
+                builder.switch_to(current_block);
+                
+                let expected_ptr = builder.fresh_val();
+                builder.emit(IrInstr::StrPtr(expected_ptr, cname.clone()));
+                
+                let is_match = builder.cmp(CmpOp::Eq, class_name_ptr, expected_ptr);
+                builder.terminate(IrTerminator::Branch(is_match, match_block, next_block));
+                
+                builder.switch_to(match_block);
+                let prefixed_name = format!("{}_{}", impl_class, method_name);
+                
+                // Call implementation.
+                let impl_param_count = self.get_method_param_count(&impl_class, method_name) + 1; // +1 for this
+                let mut passed_args = vec![];
+                for i in 0..impl_param_count {
+                    if i < arg_vals.len() {
+                        passed_args.push(arg_vals[i]);
+                    } else {
+                        passed_args.push(builder.const_i64(1)); // default tagged 0
+                    }
+                }
+                
+                let res = builder.fresh_val();
+                builder.emit(IrInstr::Call(res, prefixed_name, passed_args));
+                builder.terminate(IrTerminator::Ret(res));
+                
+                current_block = next_block;
+            }
+        }
+
+        builder.switch_to(current_block);
+        let default_val = builder.const_i64(1); // tagged 0
+        builder.terminate(IrTerminator::Ret(default_val));
+
+        self.module.functions.push(builder.build());
+        Ok(())
+    }
+
+    fn resolve_method_impl(&self, class_name: &str, method_name: &str) -> Option<String> {
+        let mut curr = Some(class_name.to_string());
+        while let Some(cls_name) = curr {
+            if let Some(Statement::Class { methods, base, .. }) = self.classes.get(&cls_name) {
+                for m in methods {
+                    let mname = match m {
+                        Statement::Method { name, .. } => name.clone(),
+                        Statement::Function { name, .. } => name.clone(),
+                        _ => continue,
+                    };
+                    if mname == method_name {
+                        return Some(cls_name);
+                    }
+                }
+                curr = base.clone();
+            } else {
+                break;
+            }
+        }
+        None
+    }
+
+    fn get_method_param_count(&self, class_name: &str, method_name: &str) -> usize {
+        if let Some(Statement::Class { methods, .. }) = self.classes.get(class_name) {
+            for m in methods {
+                let (mname, params) = match m {
+                    Statement::Method { name, params, .. } => (name, params),
+                    Statement::Function { name, params, .. } => (name, params),
+                    _ => continue,
+                };
+                if mname == method_name {
+                    return params.len();
+                }
+            }
+        }
+        0
+    }
+
+    fn compile_socket_method_connect(&mut self) -> Result<()> {
+        let mut builder = IrBuilder::new("Socket_connect", IrType::I64);
+        let this_val = builder.fresh_val();
+        let ip_val = builder.fresh_val();
+        let port_val = builder.fresh_val();
+        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::Ptr });
+        builder.function.params.push(IrParam { val: ip_val, name: "ip".to_string(), ty: IrType::I64 });
+        builder.function.params.push(IrParam { val: port_val, name: "port".to_string(), ty: IrType::I64 });
+        
+        let entry = builder.fresh_block("entry");
+        builder.switch_to(entry);
+        
+        let index = *self.field_indices.get("_handle").unwrap_or(&0);
+        let index_val = builder.const_i64((index + 1) as i64);
+        let field_ptr = builder.gep(this_val, index_val);
+        let handle = builder.load(field_ptr, IrType::I64);
+        
+        let res = builder.fresh_val();
+        builder.emit(IrInstr::Call(res, "vajra_socket_connect".to_string(), vec![handle, ip_val, port_val]));
+        builder.terminate(IrTerminator::Ret(res));
+        
+        self.module.functions.push(builder.build());
+        Ok(())
+    }
+
+    fn compile_socket_method_send(&mut self) -> Result<()> {
+        let mut builder = IrBuilder::new("Socket_send", IrType::I64);
+        let this_val = builder.fresh_val();
+        let data_val = builder.fresh_val();
+        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::Ptr });
+        builder.function.params.push(IrParam { val: data_val, name: "data".to_string(), ty: IrType::I64 });
+        
+        let entry = builder.fresh_block("entry");
+        builder.switch_to(entry);
+        
+        let index = *self.field_indices.get("_handle").unwrap_or(&0);
+        let index_val = builder.const_i64((index + 1) as i64);
+        let field_ptr = builder.gep(this_val, index_val);
+        let handle = builder.load(field_ptr, IrType::I64);
+        
+        let res = builder.fresh_val();
+        builder.emit(IrInstr::Call(res, "vajra_socket_send".to_string(), vec![handle, data_val]));
+        builder.terminate(IrTerminator::Ret(res));
+        
+        self.module.functions.push(builder.build());
+        Ok(())
+    }
+
+    fn compile_socket_method_recv(&mut self) -> Result<()> {
+        let mut builder = IrBuilder::new("Socket_recv", IrType::Ptr);
+        let this_val = builder.fresh_val();
+        let len_val = builder.fresh_val();
+        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::Ptr });
+        builder.function.params.push(IrParam { val: len_val, name: "len".to_string(), ty: IrType::I64 });
+        
+        let entry = builder.fresh_block("entry");
+        builder.switch_to(entry);
+        
+        let index = *self.field_indices.get("_handle").unwrap_or(&0);
+        let index_val = builder.const_i64((index + 1) as i64);
+        let field_ptr = builder.gep(this_val, index_val);
+        let handle = builder.load(field_ptr, IrType::I64);
+        
+        let res = builder.fresh_val();
+        builder.emit(IrInstr::Call(res, "vajra_socket_recv".to_string(), vec![handle, len_val]));
+        builder.terminate(IrTerminator::Ret(res));
+        
+        self.module.functions.push(builder.build());
+        Ok(())
+    }
+
+    fn compile_socket_method_close(&mut self) -> Result<()> {
+        let mut builder = IrBuilder::new("Socket_close", IrType::I64);
+        let this_val = builder.fresh_val();
+        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::Ptr });
+        
+        let entry = builder.fresh_block("entry");
+        builder.switch_to(entry);
+        
+        let index = *self.field_indices.get("_handle").unwrap_or(&0);
+        let index_val = builder.const_i64((index + 1) as i64);
+        let field_ptr = builder.gep(this_val, index_val);
+        let handle = builder.load(field_ptr, IrType::I64);
+        
+        let res = builder.fresh_val();
+        builder.emit(IrInstr::Call(res, "vajra_socket_close".to_string(), vec![handle]));
+        builder.terminate(IrTerminator::Ret(res));
+        
+        self.module.functions.push(builder.build());
+        Ok(())
+    }
+}
+

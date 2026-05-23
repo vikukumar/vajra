@@ -25,7 +25,7 @@ impl Linter {
                     self.lint_statement(s);
                 }
             }
-            Statement::Class { name, fields, methods } => {
+            Statement::Class { name, fields, methods, .. } => {
                 self.check_naming(name, "class", true);
                 for (field_name, _) in fields {
                     self.check_naming(field_name, "field", false);

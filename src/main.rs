@@ -583,7 +583,8 @@ fn compile_module_transitively(
 }
 
 fn parse(source: &str) -> Result<Program> {
-    let lexer = Lexer::new(source);
+    let preprocessed = vajra_core::preprocessor::preprocess_source(source);
+    let lexer = Lexer::new(&preprocessed);
     let mut parser = Parser::new(lexer);
     Ok(parser.parse_program())
 }

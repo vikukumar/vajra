@@ -179,6 +179,25 @@ impl<'a> Parser<'a> {
         self.next_token(); // skip 'class'
         let name = if let TokenKind::Identifier(id) = &self.cur_token.kind { id.clone() } else { return None; };
         self.next_token();
+
+        let mut base = None;
+        // Support 'class Child : Parent' or 'class Child extends Parent'
+        if self.cur_token.kind == TokenKind::Colon || self.cur_token.kind == TokenKind::DoubleColon {
+            self.next_token();
+            if let TokenKind::Identifier(base_name) = &self.cur_token.kind {
+                base = Some(base_name.clone());
+                self.next_token();
+            }
+        } else if let TokenKind::Identifier(ext) = &self.cur_token.kind {
+            if ext == "extends" {
+                self.next_token();
+                if let TokenKind::Identifier(base_name) = &self.cur_token.kind {
+                    base = Some(base_name.clone());
+                    self.next_token();
+                }
+            }
+        }
+
         self.skip_newlines();
 
         if self.cur_token.kind != TokenKind::LBrace { return None; }
@@ -201,7 +220,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.next_token(); // skip '}'
-        Some(Statement::Class { name, fields, methods })
+        Some(Statement::Class { name, base, fields, methods })
     }
 
     fn parse_function(&mut self, is_main: bool, is_extern: bool, is_inline: bool) -> Option<Statement> {
@@ -318,6 +337,11 @@ impl<'a> Parser<'a> {
             TokenKind::Pipe => 16,
             TokenKind::AndAnd => 10,
             TokenKind::OrOr => 5,
+            TokenKind::Assign
+            | TokenKind::PlusAssign
+            | TokenKind::MinusAssign
+            | TokenKind::MulAssign
+            | TokenKind::DivAssign => 2,
             _ => 0,
         }
     }
@@ -414,6 +438,64 @@ impl<'a> Parser<'a> {
                     left = Expression::BinaryOp { left: Box::new(left), op, right: Box::new(right) };
                 }
 
+                TokenKind::Assign => {
+                    self.next_token();
+                    let right = self.parse_expression(next_prec - 1);
+                    left = match left {
+                        Expression::Identifier(name) => {
+                            Expression::Assign { name, value: Box::new(right) }
+                        }
+                        Expression::PropertyAccess { object, property } => {
+                            Expression::PropertyAssign { object, property, value: Box::new(right) }
+                        }
+                        Expression::Index { object, index } => {
+                            Expression::IndexAssign { object, index, value: Box::new(right) }
+                        }
+                        _ => left,
+                    };
+                }
+
+                TokenKind::PlusAssign | TokenKind::MinusAssign | TokenKind::MulAssign | TokenKind::DivAssign => {
+                    let op_kind = self.cur_token.kind.clone();
+                    self.next_token();
+                    let right = self.parse_expression(next_prec - 1);
+                    let op_str = match op_kind {
+                        TokenKind::PlusAssign => "+",
+                        TokenKind::MinusAssign => "-",
+                        TokenKind::MulAssign => "*",
+                        TokenKind::DivAssign => "/",
+                        _ => unreachable!(),
+                    }.to_string();
+
+                    left = match left {
+                        Expression::Identifier(name) => {
+                            let value = Expression::BinaryOp {
+                                left: Box::new(Expression::Identifier(name.clone())),
+                                op: op_str,
+                                right: Box::new(right),
+                            };
+                            Expression::Assign { name, value: Box::new(value) }
+                        }
+                        Expression::PropertyAccess { object, property } => {
+                            let value = Expression::BinaryOp {
+                                left: Box::new(Expression::PropertyAccess { object: object.clone(), property: property.clone() }),
+                                op: op_str,
+                                right: Box::new(right),
+                            };
+                            Expression::PropertyAssign { object, property, value: Box::new(value) }
+                        }
+                        Expression::Index { object, index } => {
+                            let value = Expression::BinaryOp {
+                                left: Box::new(Expression::Index { object: object.clone(), index: index.clone() }),
+                                op: op_str,
+                                right: Box::new(right),
+                            };
+                            Expression::IndexAssign { object, index, value: Box::new(value) }
+                        }
+                        _ => left,
+                    };
+                }
+
                 _ => break,
             }
         }
@@ -475,7 +557,22 @@ impl<'a> Parser<'a> {
             TokenKind::This => { self.next_token(); Expression::Identifier("this".into()) }
             TokenKind::New => {
                 self.next_token();
-                self.parse_expression(0)
+                let class_name = if let TokenKind::Identifier(id) = &self.cur_token.kind {
+                    id.clone()
+                } else {
+                    return Expression::Literal(Literal::Null);
+                };
+                self.next_token();
+                let mut args = Vec::new();
+                if self.cur_token.kind == TokenKind::LParen {
+                    self.next_token();
+                    while self.cur_token.kind != TokenKind::RParen && self.cur_token.kind != TokenKind::EOF {
+                        args.push(self.parse_expression(0));
+                        if self.cur_token.kind == TokenKind::Comma { self.next_token(); }
+                    }
+                    if self.cur_token.kind == TokenKind::RParen { self.next_token(); }
+                }
+                Expression::ObjectInstantiation { class_name, args }
             }
             TokenKind::Await => {
                 self.next_token();
