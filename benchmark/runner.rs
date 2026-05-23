@@ -97,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ==========================================
     println!("\n🔨 Compiling Vajra [fib.vj] via LLVM AOT...");
     let vj_status = Command::new(vajrac_bin)
-        .args(&["build", "benchmark/fib.vj", "-o", fib_vj_exe])
+        .args(&["build", "benchmark/fib.vj", "-o", fib_vj_exe, "--release"])
         .status()?;
     if !vj_status.success() {
         return Err("Failed to compile Vajra Fibonacci".into());
@@ -105,7 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🔨 Compiling Vajra [loop.vj] via LLVM AOT...");
     let vj_loop_status = Command::new(vajrac_bin)
-        .args(&["build", "benchmark/loop.vj", "-o", loop_vj_exe])
+        .args(&["build", "benchmark/loop.vj", "-o", loop_vj_exe, "--release"])
         .status()?;
     if !vj_loop_status.success() {
         return Err("Failed to compile Vajra Loop".into());
@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🔨 Compiling Vajra [nn.vj] via LLVM AOT...");
     let vj_nn_status = Command::new(vajrac_bin)
-        .args(&["build", "benchmark/nn.vj", "-o", nn_vj_exe])
+        .args(&["build", "benchmark/nn.vj", "-o", nn_vj_exe, "--release"])
         .status()?;
     if !vj_nn_status.success() {
         return Err("Failed to compile Vajra Neural Network".into());

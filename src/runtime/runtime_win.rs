@@ -8,6 +8,43 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
+    for i in 0..n {
+        *s.add(i) = c as u8;
+    }
+    s
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    for i in 0..n {
+        *dest.add(i) = *src.add(i);
+    }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
+    for i in 0..n {
+        let a = *s1.add(i);
+        let b = *s2.add(i);
+        if a != b {
+            return if a < b { -1 } else { 1 };
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
+    let mut len = 0;
+    while *s.add(len) != 0 {
+        len += 1;
+    }
+    len
+}
+
 extern "system" {
     fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
     fn GetStdHandle(nStdHandle: i32) -> *mut c_void;
@@ -59,7 +96,7 @@ struct SYSTEM_INFO {
 }
 
 const MAX_THREADS: usize = 64;
-const HEAP_SIZE: usize = 16 * 1024 * 1024; // 16 MB TLAB per thread
+const HEAP_SIZE: usize = 512 * 1024 * 1024; // 512 MB TLAB per thread
 
 static mut G_STDOUT: *mut c_void = core::ptr::null_mut();
 static mut G_THREAD_IDS: [u64; MAX_THREADS] = [0; MAX_THREADS];
@@ -97,7 +134,7 @@ unsafe fn get_stack_base() -> *mut u8 {
 unsafe fn get_thread_idx() -> usize {
     let tid = get_thread_id();
     for i in 0..MAX_THREADS {
-        let ptr = &G_THREAD_IDS[i] as *const u64 as *const AtomicU64;
+        let ptr = G_THREAD_IDS.as_ptr().add(i) as *const AtomicU64;
         let actual_tid = (*ptr).load(Ordering::SeqCst);
         if actual_tid == tid {
             return i;
@@ -106,18 +143,18 @@ unsafe fn get_thread_idx() -> usize {
     
     // Register dynamically in empty slot
     for i in 0..MAX_THREADS {
-        let ptr = &G_THREAD_IDS[i] as *const u64 as *mut AtomicU64;
+        let ptr = G_THREAD_IDS.as_mut_ptr().add(i) as *mut AtomicU64;
         if (*ptr).compare_exchange(0, tid, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            G_STACK_BASES[i] = get_stack_base();
+            *G_STACK_BASES.as_mut_ptr().add(i) = get_stack_base();
             let heap = VirtualAlloc(
                 core::ptr::null_mut(),
                 HEAP_SIZE,
                 0x3000, // MEM_COMMIT | MEM_RESERVE
                 0x04,   // PAGE_READWRITE
             );
-            G_HEAP_STARTS[i] = heap as *mut u8;
-            G_HEAP_LIMITS[i] = HEAP_SIZE;
-            G_HEAP_BUMPS[i] = 0;
+            *G_HEAP_STARTS.as_mut_ptr().add(i) = heap as *mut u8;
+            *G_HEAP_LIMITS.as_mut_ptr().add(i) = HEAP_SIZE;
+            *G_HEAP_BUMPS.as_mut_ptr().add(i) = 0;
             return i;
         }
         if (*ptr).load(Ordering::SeqCst) == tid {
@@ -151,18 +188,18 @@ unsafe fn print_i64_nn(val: i64) {
 
     if abs_val == 0 {
         ptr -= 1;
-        buf[ptr] = b'0';
+        *buf.as_mut_ptr().add(ptr) = b'0';
     } else {
         while abs_val > 0 {
             ptr -= 1;
-            buf[ptr] = b'0' + (abs_val % 10) as u8;
+            *buf.as_mut_ptr().add(ptr) = b'0' + (abs_val % 10) as u8;
             abs_val /= 10;
         }
     }
 
     if is_neg {
         ptr -= 1;
-        buf[ptr] = b'-';
+        *buf.as_mut_ptr().add(ptr) = b'-';
     }
 
     print_raw(buf.as_ptr().add(ptr), buf.len() - ptr);
@@ -214,7 +251,7 @@ pub unsafe extern "C" fn vajra_print_i64(val: i64) {
                 let mut ptr = 9;
                 while temp > 0 && ptr > 0 {
                     ptr -= 1;
-                    buf[ptr] = b'0' + (temp % 10) as u8;
+                    *buf.as_mut_ptr().add(ptr) = b'0' + (temp % 10) as u8;
                     temp /= 10;
                 }
                 print_raw(buf.as_ptr(), 9);
@@ -333,8 +370,8 @@ pub unsafe extern "C" fn vajra_runtime_init() {
     
     // Initialize main thread state
     let tid = get_thread_id();
-    G_THREAD_IDS[0] = tid;
-    G_STACK_BASES[0] = get_stack_base();
+    *G_THREAD_IDS.as_mut_ptr().add(0) = tid;
+    *G_STACK_BASES.as_mut_ptr().add(0) = get_stack_base();
     
     let heap = VirtualAlloc(
         core::ptr::null_mut(),
@@ -342,9 +379,9 @@ pub unsafe extern "C" fn vajra_runtime_init() {
         0x3000, // MEM_COMMIT | MEM_RESERVE
         0x04,   // PAGE_READWRITE
     );
-    G_HEAP_STARTS[0] = heap as *mut u8;
-    G_HEAP_LIMITS[0] = HEAP_SIZE;
-    G_HEAP_BUMPS[0] = 0;
+    *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
+    *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
+    *G_HEAP_BUMPS.as_mut_ptr().add(0) = 0;
 }
 
 #[no_mangle]
@@ -353,9 +390,9 @@ pub unsafe extern "C" fn vajra_alloc(size: usize) -> *mut u8 {
     let total_size = size + 8;
 
     let idx = get_thread_idx();
-    let bump = G_HEAP_BUMPS[idx];
-    let limit = G_HEAP_LIMITS[idx];
-    let start = G_HEAP_STARTS[idx];
+    let bump = *G_HEAP_BUMPS.as_ptr().add(idx);
+    let limit = *G_HEAP_LIMITS.as_ptr().add(idx);
+    let start = *G_HEAP_STARTS.as_ptr().add(idx);
 
     if start.is_null() {
         vajra_throw(b"Heap allocation failure\0".as_ptr());
@@ -366,19 +403,19 @@ pub unsafe extern "C" fn vajra_alloc(size: usize) -> *mut u8 {
         let header = ptr as *mut AllocHeader;
         (*header).size = size as u32;
         (*header).marked = 0;
-        G_HEAP_BUMPS[idx] = bump + total_size;
+        *G_HEAP_BUMPS.as_mut_ptr().add(idx) = bump + total_size;
         return ptr.add(8);
     }
 
     gc_collect(idx);
 
-    let bump = G_HEAP_BUMPS[idx];
+    let bump = *G_HEAP_BUMPS.as_ptr().add(idx);
     if bump + total_size <= limit {
         let ptr = start.add(bump);
         let header = ptr as *mut AllocHeader;
         (*header).size = size as u32;
         (*header).marked = 0;
-        G_HEAP_BUMPS[idx] = bump + total_size;
+        *G_HEAP_BUMPS.as_mut_ptr().add(idx) = bump + total_size;
         return ptr.add(8);
     }
 
@@ -391,8 +428,8 @@ pub unsafe extern "C" fn vajra_free(_ptr: *mut u8) {
 }
 
 unsafe fn mark_block(idx: usize, ptr: *mut u8) -> bool {
-    let heap_start = G_HEAP_STARTS[idx];
-    let heap_bump = G_HEAP_BUMPS[idx];
+    let heap_start = *G_HEAP_STARTS.as_ptr().add(idx);
+    let heap_bump = *G_HEAP_BUMPS.as_ptr().add(idx);
 
     let mut offset = 0;
     while offset < heap_bump {
@@ -414,8 +451,8 @@ unsafe fn mark_block(idx: usize, ptr: *mut u8) -> bool {
 }
 
 unsafe fn gc_collect(idx: usize) {
-    let heap_start = G_HEAP_STARTS[idx];
-    let heap_bump = G_HEAP_BUMPS[idx];
+    let heap_start = *G_HEAP_STARTS.as_ptr().add(idx);
+    let heap_bump = *G_HEAP_BUMPS.as_ptr().add(idx);
 
     // 1. Clear marks
     let mut offset = 0;
@@ -441,7 +478,7 @@ unsafe fn gc_collect(idx: usize) {
     // 2. Scan stack
     let mut rsp: *mut usize;
     core::arch::asm!("mov {}, rsp", out(reg) rsp);
-    let stack_base = G_STACK_BASES[idx] as *mut usize;
+    let stack_base = *G_STACK_BASES.as_ptr().add(idx) as *mut usize;
 
     if !stack_base.is_null() && rsp < stack_base {
         let mut cur = rsp;
@@ -492,7 +529,7 @@ unsafe fn gc_collect(idx: usize) {
         offset += block_size;
     }
 
-    G_HEAP_BUMPS[idx] = max_live_end;
+    *G_HEAP_BUMPS.as_mut_ptr().add(idx) = max_live_end;
 }
 
 struct ThreadArg {
@@ -543,8 +580,7 @@ pub unsafe extern "C" fn vajra_parallel_for(
     let chunk_size = (range + num_threads as i64 - 1) / num_threads as i64;
     let join_counter = AtomicI32::new((num_threads - 1) as i32);
 
-    const UNINIT: core::mem::MaybeUninit<ThreadArg> = core::mem::MaybeUninit::uninit();
-    let mut args = [UNINIT; 64];
+    let args = vajra_alloc(64 * core::mem::size_of::<ThreadArg>()) as *mut ThreadArg;
 
     let mut _workers_spawned = 0;
 
@@ -556,13 +592,12 @@ pub unsafe extern "C" fn vajra_parallel_for(
             continue;
         }
 
-        args[t as usize - 1].write(ThreadArg {
-            start: t_start,
-            end: t_end,
-            context,
-            loop_body,
-            counter: &join_counter,
-        });
+        let arg_ptr = args.add(t as usize - 1);
+        (*arg_ptr).start = t_start;
+        (*arg_ptr).end = t_end;
+        (*arg_ptr).context = context;
+        (*arg_ptr).loop_body = loop_body;
+        (*arg_ptr).counter = &join_counter;
 
         extern "system" fn worker_proc(param: *mut c_void) -> u32 {
             unsafe {
@@ -582,7 +617,7 @@ pub unsafe extern "C" fn vajra_parallel_for(
             core::ptr::null_mut(),
             0,
             worker_proc,
-            args[t as usize - 1].as_ptr() as *mut c_void,
+            arg_ptr as *mut c_void,
             0,
             core::ptr::null_mut(),
         );
@@ -883,24 +918,29 @@ unsafe fn bigint_div_rem_abs(a: *const BigInt, b: *const BigInt) -> (*mut BigInt
         return (q, r);
     }
     
-    let mut b_powers: [*mut BigInt; 2048] = [core::ptr::null_mut(); 2048];
-    b_powers[0] = alloc_bigint((*b).len as usize);
+    let max_powers = 2048;
+    let b_powers = vajra_alloc(max_powers * 8) as *mut *mut BigInt;
+    for i in 0..max_powers {
+        *b_powers.add(i) = core::ptr::null_mut();
+    }
+    
+    *b_powers = alloc_bigint((*b).len as usize);
     for i in 0..((*b).len as usize) {
-        *(*b_powers[0]).digits.add(i) = *(*b).digits.add(i);
+        *(*(*b_powers)).digits.add(i) = *(*b).digits.add(i);
     }
     
     let mut k = 0;
-    let mut current_b = b_powers[0];
+    let mut current_b = *b_powers;
     loop {
         let next_b = bigint_shl_1(current_b);
         if bigint_cmp_abs(next_b, a) > 0 {
             break;
         }
         k += 1;
-        if k >= 2048 {
+        if k >= max_powers {
             break;
         }
-        b_powers[k] = next_b;
+        *b_powers.add(k) = next_b;
         current_b = next_b;
     }
     
@@ -916,7 +956,7 @@ unsafe fn bigint_div_rem_abs(a: *const BigInt, b: *const BigInt) -> (*mut BigInt
         let new_quot = bigint_shl_1(quot);
         quot = new_quot;
         
-        let bp = b_powers[i];
+        let bp = *b_powers.add(i);
         if bigint_cmp_abs(rem, bp) >= 0 {
             let new_rem = bigint_sub_abs(rem, bp);
             let one = bigint_from_i64(1);

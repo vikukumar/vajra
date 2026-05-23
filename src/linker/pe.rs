@@ -294,9 +294,6 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
                             }
                         };
                         let final_rva = sec_rva + chunk.start_offset as u32 + sym.address() as u32;
-                        if name == "vajra_runtime_init" || name == "vajra_print_str" || name == "main" {
-                            println!("Symbol: {} -> RVA: 0x{:08X}", name, final_rva);
-                        }
                         symbol_vas.insert(name.to_string(), final_rva);
                     }
                 }
