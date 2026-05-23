@@ -13,15 +13,44 @@ use crate::linker::TargetPlatform;
 /// The runtime is pre-compiled from this Rust code and embedded at build time.
 pub fn get_runtime_object_bytes(platform: &TargetPlatform) -> Vec<u8> {
     match platform {
-        TargetPlatform::WindowsX64 => generate_windows_runtime(),
-        TargetPlatform::LinuxX64 => generate_linux_runtime(),
-        TargetPlatform::MacOsX64 => generate_linux_runtime(), // similar syscall style
+        TargetPlatform::WindowsX64 => {
+            #[cfg(target_os = "windows")]
+            {
+                generate_host_runtime()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                // If cross-compiling, return the checked-in Windows runtime object bytes
+                include_bytes!("runtime_win.o").to_vec()
+            }
+        }
+        TargetPlatform::LinuxX64 => {
+            #[cfg(target_os = "linux")]
+            {
+                generate_host_runtime()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                // Fall back to generating ELF on the fly if cross-compiling
+                generate_linux_runtime()
+            }
+        }
+        TargetPlatform::MacOsX64 => {
+            #[cfg(target_os = "macos")]
+            {
+                generate_host_runtime()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                generate_linux_runtime()
+            }
+        }
     }
 }
 
-/// Retrieve the Windows runtime object bytes compiled from runtime_win.rs via build.rs
-fn generate_windows_runtime() -> Vec<u8> {
-    include_bytes!(concat!(env!("OUT_DIR"), "/runtime_win.o")).to_vec()
+/// Retrieve the host runtime object bytes compiled from runtime.rs via build.rs
+fn generate_host_runtime() -> Vec<u8> {
+    include_bytes!(concat!(env!("OUT_DIR"), "/runtime.o")).to_vec()
 }
 
 /// Generate the Linux runtime as an ELF object with direct syscall implementations

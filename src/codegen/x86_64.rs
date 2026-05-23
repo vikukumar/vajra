@@ -859,21 +859,6 @@ impl<'m> X86_64Codegen<'m> {
         Ok(())
     }
 
-    fn arith_op(&self, fg: &mut FuncGen, dst: ValId, a: ValId, b: ValId, op_bytes: &[u8]) -> Result<()> {
-        self.load_operands(fg, a, b)?;
-        fg.emit(op_bytes);
-        if fg.non_spillable.contains(&dst) {
-            fg.val_locs.insert(dst, ValueLoc::Reg(Reg::Rax));
-        } else {
-            let off = fg.alloc_stack(8);
-            emit_store_rbp_offset(&mut fg.code, off, Reg::Rax);
-            fg.val_locs.insert(dst, ValueLoc::Stack(off));
-        }
-        fg.invalidate_reg(Reg::Rax);
-        fg.set_reg(Reg::Rax, dst);
-        Ok(())
-    }
-
     fn call_binary_helper(&self, fg: &mut FuncGen, dst: ValId, a: ValId, b: ValId, name: &str) -> Result<()> {
         let arg_regs = get_arg_regs();
         self.load_into(fg, a, arg_regs[0])?;

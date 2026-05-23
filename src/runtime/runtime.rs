@@ -3,6 +3,11 @@ use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use core::ffi::c_void;
 
+#[cfg(target_os = "windows")]
+const EOL: &[u8] = b"\r\n";
+#[cfg(not(target_os = "windows"))]
+const EOL: &[u8] = b"\n";
+
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
@@ -45,6 +50,7 @@ pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
     len
 }
 
+#[cfg(target_os = "windows")]
 extern "system" {
     fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
     fn GetStdHandle(nStdHandle: i32) -> *mut c_void;
@@ -80,6 +86,7 @@ extern "system" {
     fn GetSystemInfo(lpSystemInfo: *mut SYSTEM_INFO);
 }
 
+#[cfg(target_os = "windows")]
 #[repr(C)]
 struct SYSTEM_INFO {
     wProcessorArchitecture: u16,
@@ -95,10 +102,86 @@ struct SYSTEM_INFO {
     wProcessorRevision: u16,
 }
 
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 1, // SYS_write
+        in("rdi") fd,
+        in("rsi") buf,
+        in("rdx") count,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_arch = "x86_64")))]
+unsafe fn sys_write(_fd: i32, _buf: *const u8, _count: usize) -> isize {
+    0
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_mmap(
+    addr: *mut c_void,
+    len: usize,
+    prot: i32,
+    flags: i32,
+    fd: i32,
+    offset: i64,
+) -> *mut c_void {
+    let ret: *mut c_void;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 9, // SYS_mmap
+        in("rdi") addr,
+        in("rsi") len,
+        in("rdx") prot,
+        in("r10") flags,
+        in("r8") fd,
+        in("r9") offset,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_arch = "x86_64")))]
+unsafe fn sys_mmap(
+    _addr: *mut c_void,
+    _len: usize,
+    _prot: i32,
+    _flags: i32,
+    _fd: i32,
+    _offset: i64,
+) -> *mut c_void {
+    core::ptr::null_mut()
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_exit(status: i32) -> ! {
+    core::arch::asm!(
+        "syscall",
+        in("rax") 60, // SYS_exit
+        in("rdi") status,
+        options(noreturn),
+    );
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_arch = "x86_64")))]
+unsafe fn sys_exit(_status: i32) -> ! {
+    loop {}
+}
+
 const MAX_THREADS: usize = 64;
 const HEAP_SIZE: usize = 512 * 1024 * 1024; // 512 MB TLAB per thread
 
+#[cfg(target_os = "windows")]
 static mut G_STDOUT: *mut c_void = core::ptr::null_mut();
+
 static mut G_THREAD_IDS: [u64; MAX_THREADS] = [0; MAX_THREADS];
 static mut G_HEAP_STARTS: [*mut u8; MAX_THREADS] = [core::ptr::null_mut(); MAX_THREADS];
 static mut G_HEAP_BUMPS: [usize; MAX_THREADS] = [0; MAX_THREADS];
@@ -113,6 +196,7 @@ struct AllocHeader {
     marked: u32,
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn get_thread_id() -> u64 {
     let thread_id: u64;
     core::arch::asm!(
@@ -122,6 +206,7 @@ unsafe fn get_thread_id() -> u64 {
     thread_id
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn get_stack_base() -> *mut u8 {
     let stack_base: *mut u8;
     core::arch::asm!(
@@ -131,6 +216,7 @@ unsafe fn get_stack_base() -> *mut u8 {
     stack_base
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn get_thread_idx() -> usize {
     let tid = get_thread_id();
     for i in 0..MAX_THREADS {
@@ -164,12 +250,64 @@ unsafe fn get_thread_idx() -> usize {
     0
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn print_raw(buf: *const u8, len: usize) {
     let mut written: u32 = 0;
     if G_STDOUT.is_null() {
         G_STDOUT = GetStdHandle(-11);
     }
     WriteFile(G_STDOUT, buf, len as u32, &mut written, core::ptr::null_mut());
+}
+
+#[cfg(not(target_os = "windows"))]
+unsafe fn get_thread_id() -> u64 {
+    1
+}
+
+#[cfg(not(target_os = "windows"))]
+unsafe fn get_stack_base() -> *mut u8 {
+    core::ptr::null_mut()
+}
+
+#[cfg(not(target_os = "windows"))]
+unsafe fn get_thread_idx() -> usize {
+    let tid = get_thread_id();
+    for i in 0..MAX_THREADS {
+        let ptr = G_THREAD_IDS.as_ptr().add(i) as *const AtomicU64;
+        let actual_tid = (*ptr).load(Ordering::SeqCst);
+        if actual_tid == tid {
+            return i;
+        }
+    }
+    
+    // Register dynamically in empty slot
+    for i in 0..MAX_THREADS {
+        let ptr = G_THREAD_IDS.as_mut_ptr().add(i) as *mut AtomicU64;
+        if (*ptr).compare_exchange(0, tid, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            *G_STACK_BASES.as_mut_ptr().add(i) = get_stack_base();
+            let heap = sys_mmap(
+                core::ptr::null_mut(),
+                HEAP_SIZE,
+                0x03,  // PROT_READ | PROT_WRITE = 0x3
+                0x22,  // MAP_PRIVATE | MAP_ANONYMOUS = 0x22
+                -1,
+                0,
+            );
+            *G_HEAP_STARTS.as_mut_ptr().add(i) = heap as *mut u8;
+            *G_HEAP_LIMITS.as_mut_ptr().add(i) = HEAP_SIZE;
+            *G_HEAP_BUMPS.as_mut_ptr().add(i) = 0;
+            return i;
+        }
+        if (*ptr).load(Ordering::SeqCst) == tid {
+            return i;
+        }
+    }
+    0
+}
+
+#[cfg(not(target_os = "windows"))]
+unsafe fn print_raw(buf: *const u8, len: usize) {
+    sys_write(1, buf, len);
 }
 
 unsafe fn print_i64_nn(val: i64) {
@@ -258,7 +396,7 @@ pub unsafe extern "C" fn vajra_print_i64(val: i64) {
             }
         }
     }
-    print_raw(b"\r\n".as_ptr(), 2);
+    print_raw(EOL.as_ptr(), EOL.len());
 }
 
 fn f64_is_nan(v: f64) -> bool {
@@ -275,14 +413,17 @@ fn f64_is_infinite(v: f64) -> bool {
 pub unsafe extern "C" fn vajra_print_f64(val: f64) {
     let mut v = val;
     if f64_is_nan(v) {
-        print_raw(b"NaN\r\n".as_ptr(), 5);
+        print_raw(b"NaN".as_ptr(), 3);
+        print_raw(EOL.as_ptr(), EOL.len());
         return;
     }
     if f64_is_infinite(v) {
         if v < 0.0 {
-            print_raw(b"-inf\r\n".as_ptr(), 6);
+            print_raw(b"-inf".as_ptr(), 4);
+            print_raw(EOL.as_ptr(), EOL.len());
         } else {
-            print_raw(b"inf\r\n".as_ptr(), 5);
+            print_raw(b"inf".as_ptr(), 3);
+            print_raw(EOL.as_ptr(), EOL.len());
         }
         return;
     }
@@ -300,7 +441,7 @@ pub unsafe extern "C" fn vajra_print_f64(val: f64) {
         print_i64_nn(digit % 10);
         frac -= digit as f64;
     }
-    print_raw(b"\r\n".as_ptr(), 2);
+    print_raw(EOL.as_ptr(), EOL.len());
 }
 
 #[no_mangle]
@@ -315,12 +456,13 @@ pub unsafe extern "C" fn vajra_strlen(s: *const u8) -> usize {
 #[no_mangle]
 pub unsafe extern "C" fn vajra_print_str(s: *const u8) {
     if s.is_null() {
-        print_raw(b"null\r\n".as_ptr(), 6);
+        print_raw(b"null".as_ptr(), 4);
+        print_raw(EOL.as_ptr(), EOL.len());
         return;
     }
     let len = vajra_strlen(s);
     print_raw(s, len);
-    print_raw(b"\r\n".as_ptr(), 2);
+    print_raw(EOL.as_ptr(), EOL.len());
 }
 
 #[no_mangle]
@@ -328,9 +470,16 @@ pub unsafe extern "C" fn vajra_print_auto(s: *const u8) {
     vajra_print_str(s);
 }
 
+#[cfg(target_os = "windows")]
 #[no_mangle]
 pub unsafe extern "C" fn vajra_exit(code: i64) -> ! {
     ExitProcess(code as u32);
+}
+
+#[cfg(not(target_os = "windows"))]
+#[no_mangle]
+pub unsafe extern "C" fn vajra_exit(code: i64) -> ! {
+    sys_exit(code as i32);
 }
 
 #[no_mangle]
@@ -363,6 +512,7 @@ pub unsafe extern "C" fn vajra_readline() -> *mut u8 {
     core::ptr::null_mut()
 }
 
+#[cfg(target_os = "windows")]
 #[no_mangle]
 pub unsafe extern "C" fn vajra_runtime_init() {
     SetConsoleOutputCP(65001);
@@ -378,6 +528,27 @@ pub unsafe extern "C" fn vajra_runtime_init() {
         HEAP_SIZE,
         0x3000, // MEM_COMMIT | MEM_RESERVE
         0x04,   // PAGE_READWRITE
+    );
+    *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
+    *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
+    *G_HEAP_BUMPS.as_mut_ptr().add(0) = 0;
+}
+
+#[cfg(not(target_os = "windows"))]
+#[no_mangle]
+pub unsafe extern "C" fn vajra_runtime_init() {
+    // Initialize main thread state
+    let tid = get_thread_id();
+    *G_THREAD_IDS.as_mut_ptr().add(0) = tid;
+    *G_STACK_BASES.as_mut_ptr().add(0) = get_stack_base();
+    
+    let heap = sys_mmap(
+        core::ptr::null_mut(),
+        HEAP_SIZE,
+        0x03,  // PROT_READ | PROT_WRITE
+        0x22,  // MAP_PRIVATE | MAP_ANONYMOUS
+        -1,
+        0,
     );
     *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
     *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
@@ -464,6 +635,7 @@ unsafe fn gc_collect(idx: usize) {
 
     // Spill non-volatile registers to stack before scanning
     let mut regs = [0usize; 7];
+    #[cfg(target_arch = "x86_64")]
     core::arch::asm!(
         "mov [{0}], rbx",
         "mov [{0} + 8], rsi",
@@ -476,7 +648,8 @@ unsafe fn gc_collect(idx: usize) {
     );
 
     // 2. Scan stack
-    let mut rsp: *mut usize;
+    let mut rsp: *mut usize = core::ptr::null_mut();
+    #[cfg(target_arch = "x86_64")]
     core::arch::asm!("mov {}, rsp", out(reg) rsp);
     let stack_base = *G_STACK_BASES.as_ptr().add(idx) as *mut usize;
 
@@ -540,6 +713,7 @@ struct ThreadArg {
     counter: *const AtomicI32,
 }
 
+#[cfg(target_os = "windows")]
 #[no_mangle]
 pub unsafe extern "C" fn vajra_parallel_for(
     start: i64,
@@ -638,6 +812,19 @@ pub unsafe extern "C" fn vajra_parallel_for(
     // Spin wait
     while join_counter.load(Ordering::SeqCst) > 0 {
         core::hint::spin_loop();
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+#[no_mangle]
+pub unsafe extern "C" fn vajra_parallel_for(
+    start: i64,
+    end: i64,
+    context: *mut c_void,
+    loop_body: extern "C" fn(i64, i64, *mut c_void),
+) {
+    if end > start {
+        loop_body(start, end, context);
     }
 }
 
