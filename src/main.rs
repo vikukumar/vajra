@@ -26,7 +26,7 @@ use vajra_core::{
     name = "vajrac",
     version = "0.1.0",
     about = "Vajra: A self-hosted programming language with multi-human-language support\nNo C, LLVM, GCC, Clang, or MSVC required — truly independent.",
-    long_about = None
+    long_about = "Vajra is a self-hosted programming language featuring multi-human-language translation (English, Hindi, Sanskrit, Spanish, Chinese, Arabic, and more) at the keyword level.\n\nIt features a custom native code generator for x86-64 and a built-in linker emitting COFF/PE executables on Windows and ELF executables on Linux/macOS. No external compiler toolchains like LLVM, GCC, MSVC, or Clang are required to compile, link, and run Vajra programs.\n\nUSAGE EXAMPLES:\n  Start REPL:          vajrac\n  Interpret a file:    vajrac exec hello.vj\n  Build project:       vajrac build\n  Compile file:        vajrac compile main.vj -o main.exe --target x86_64-pc-windows-msvc"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -36,10 +36,22 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Compile a Vajra source file to a native executable
+    ///
+    /// Compile a Vajra source file (.vj or .vajra) directly to a standalone native binary.
+    ///
+    /// EXAMPLES:
+    ///   vajrac compile main.vj -o main.exe
+    ///   vajrac compile main.vj --target x86_64-unknown-linux-gnu -o main
+    ///   vajrac compile main.vj --emit-ir
+    ///
+    /// TARGETS:
+    ///   x86_64-pc-windows-msvc    - Windows PE32+ executable
+    ///   x86_64-unknown-linux-gnu  - Linux ELF64 executable
+    ///   x86_64-apple-darwin       - macOS target (Linux-compatible ELF fallback)
     Compile {
-        /// Source file (.vajra)
+        /// Source file (.vajra or .vj)
         file: String,
-        /// Output executable path
+        /// Output executable path (defaults to file stem)
         #[arg(short, long, default_value = "")]
         output: String,
         /// Target triple (e.g. x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu)
@@ -48,64 +60,119 @@ enum Command {
         /// Optimization level (0-3)
         #[arg(short = 'O', long, default_value = "0")]
         opt: u8,
-        /// Emit IR instead of native code (for debugging)
+        /// Emit intermediate representation (IR) instead of native code
         #[arg(long)]
         emit_ir: bool,
-        /// Emit object file only (don't link)
+        /// Emit object file only (do not link into executable)
         #[arg(long)]
         emit_obj: bool,
     },
     /// Build a Vajra project (reads project.vajra or main.vajra)
+    ///
+    /// Compile and link a Vajra project based on a main entry file.
+    /// Resolves transitive imports concurrently and compiles them into a single binary.
+    ///
+    /// EXAMPLES:
+    ///   vajrac build
+    ///   vajrac build main.vj -o my_app.exe --release
     Build {
         /// Optional source file (defaults to main.vajra)
         #[arg(default_value = "main.vajra")]
         file: String,
-        /// Output executable path
+        /// Output executable path (defaults to file stem)
         #[arg(short, long, default_value = "")]
         output: String,
-        /// Release mode (optimization on)
+        /// Release mode (opt-level 3 optimized build)
         #[arg(long)]
         release: bool,
     },
-    /// Compile and run a Vajra source file
+    /// Compile and run a Vajra source file immediately
+    ///
+    /// Compile the file to a temporary executable, run it, and clean up the binary afterward.
+    /// Arguments to the executable can be passed after '--'.
+    ///
+    /// EXAMPLES:
+    ///   vajrac run hello.vj
+    ///   vajrac run calc.vj -- 10 20
     Run {
-        /// Source file
+        /// Source file to run
         file: String,
         /// Arguments to pass to the compiled program
         #[arg(last = true)]
         args: Vec<String>,
     },
     /// Execute a Vajra file using the built-in interpreter (no compilation)
+    ///
+    /// Runs the interpreter directly on the AST without compiling or linking,
+    /// ideal for quick scripting, testing, or environments without assembly codegen support.
+    ///
+    /// EXAMPLES:
+    ///   vajrac exec hello.vj
+    ///   vajrac exec calc.vj -- 10 20
     Exec {
-        /// Source file
+        /// Source file to interpret
         file: String,
-        /// Arguments
+        /// Arguments to pass to the interpreter
         #[arg(last = true)]
         args: Vec<String>,
     },
-    /// Start the Vajra REPL
+    /// Start the interactive Vajra REPL shell
+    ///
+    /// Starts the Read-Eval-Print Loop. Supports typing line-by-line Vajra statements.
+    /// Special command ':help' prints REPL commands and multi-language keywords.
+    /// Special command ':ir <code>' displays IR for a snippet.
+    ///
+    /// EXAMPLES:
+    ///   vajrac repl
     Repl,
     /// Check a Vajra file for errors (no output)
+    ///
+    /// Parses the file and lowers it to IR to verify syntax correctness,
+    /// resolving all imports transitively without outputting any code or binaries.
+    ///
+    /// EXAMPLES:
+    ///   vajrac check hello.vj
     Check {
-        /// Source file
+        /// Source file to check
         file: String,
     },
     /// Lint a Vajra file for style, unused variables, and potential issues
+    ///
+    /// Runs a set of lint rules to check for style conventions, unused variables,
+    /// or logic traps.
+    ///
+    /// EXAMPLES:
+    ///   vajrac lint hello.vj
     Lint {
-        /// Source file
+        /// Source file to lint
         file: String,
     },
     /// Show the AST for a source file (debugging tool)
+    ///
+    /// Prints a formatted JSON/debug representation of the parsed Abstract Syntax Tree.
+    ///
+    /// EXAMPLES:
+    ///   vajrac ast hello.vj
     Ast {
         /// Source file
         file: String,
     },
     /// Show the IR for a source file (debugging tool)
+    ///
+    /// Prints a formatted representation of the target-independent Vajra IR.
+    ///
+    /// EXAMPLES:
+    ///   vajrac ir hello.vj
     Ir {
         /// Source file
         file: String,
     },
     /// Print version and capability information
+    ///
+    /// Displays version details, targets, human languages supported, and compiler architecture constraints.
+    ///
+    /// EXAMPLES:
+    ///   vajrac info
     Info,
 }
 
