@@ -389,7 +389,7 @@ impl<'a> Lexer<'a> {
         let res = self.input.get(self.pos);
         if let Some(g) = res {
             self.pos += 1;
-            if *g == "\n" {
+            if *g == "\n" || *g == "\r\n" {
                 self.line += 1;
                 self.col = 1;
             } else {
@@ -474,7 +474,7 @@ impl<'a> Lexer<'a> {
                 if let Some(&"/") = self.peek() {
                     self.advance();
                     while let Some(g) = self.peek() {
-                        if *g == "\n" { break; }
+                        if *g == "\n" || *g == "\r\n" { break; }
                         self.advance();
                     }
                     return self.next_token();
@@ -491,7 +491,7 @@ impl<'a> Lexer<'a> {
                 if let Some(&"|") = self.peek() { self.advance(); TokenKind::OrOr }
                 else { TokenKind::Pipe }
             }
-            "\n" => TokenKind::Newline,
+            "\n" | "\r\n" => TokenKind::Newline,
             "\"" => TokenKind::String(self.read_string('"')),
             "'" => TokenKind::String(self.read_string('\'')),
             // Backtick raw strings
@@ -624,7 +624,7 @@ impl<'a> Lexer<'a> {
             if let Some(&"#") = self.peek() {
                 self.advance();
                 while let Some(g) = self.peek() {
-                    if *g == "\n" { break; }
+                    if *g == "\n" || *g == "\r\n" { break; }
                     self.advance();
                 }
                 skipped = true;
