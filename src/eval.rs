@@ -291,20 +291,66 @@ impl Interpreter {
 
             Statement::For { var_name, iterable, body } => {
                 let limit = self.eval_expression(iterable)?;
-                let n = match limit {
-                    Value::Integer(i) => i,
-                    _ => return Err("for loop range must be an integer".to_string()),
-                };
-                for i in 0..n {
-                    if let Some(scope) = self.scopes.last_mut() {
-                        scope.insert(var_name.clone(), Value::Integer(i));
+                match limit {
+                    Value::Integer(n) => {
+                        for i in 0..n {
+                            if let Some(scope) = self.scopes.last_mut() {
+                                scope.insert(var_name.clone(), Value::Integer(i));
+                            }
+                            match self.eval_block(body)? {
+                                Value::Break => break,
+                                Value::Continue => continue,
+                                Value::Return(v) => return Ok(Value::Return(v)),
+                                _ => {}
+                            }
+                        }
                     }
-                    match self.eval_block(body)? {
-                        Value::Break => break,
-                        Value::Continue => continue,
-                        Value::Return(v) => return Ok(Value::Return(v)),
-                        _ => {}
+                    Value::String(s) => {
+                        for c in s.chars() {
+                            if let Some(scope) = self.scopes.last_mut() {
+                                scope.insert(var_name.clone(), Value::String(c.to_string()));
+                            }
+                            match self.eval_block(body)? {
+                                Value::Break => break,
+                                Value::Continue => continue,
+                                Value::Return(v) => return Ok(Value::Return(v)),
+                                _ => {}
+                            }
+                        }
                     }
+                    Value::Object(obj) => {
+                        let class_name = {
+                            let guard = obj.lock().unwrap();
+                            guard.class_name.clone()
+                        };
+                        if class_name == "Array" {
+                            let len = {
+                                let guard = obj.lock().unwrap();
+                                match guard.fields.get("length") {
+                                    Some(Value::Integer(i)) => *i,
+                                    _ => 0,
+                                }
+                            };
+                            for i in 0..len {
+                                let item = {
+                                    let guard = obj.lock().unwrap();
+                                    guard.fields.get(&i.to_string()).cloned().unwrap_or(Value::Null)
+                                };
+                                if let Some(scope) = self.scopes.last_mut() {
+                                    scope.insert(var_name.clone(), item);
+                                }
+                                match self.eval_block(body)? {
+                                    Value::Break => break,
+                                    Value::Continue => continue,
+                                    Value::Return(v) => return Ok(Value::Return(v)),
+                                    _ => {}
+                                }
+                            }
+                        } else {
+                            return Err(format!("Cannot iterate over object of class '{}'", class_name));
+                        }
+                    }
+                    _ => return Err("for loop iterable must be an integer, string, or array".to_string()),
                 }
                 Ok(Value::Void)
             }
@@ -424,6 +470,73 @@ impl Interpreter {
                             }
                         };
                         std::process::exit(code);
+                    }
+                    "range" => {
+                        let mut fields = HashMap::new();
+                        let mut count = 0;
+                        let (start, end, step) = match args.len() {
+                            1 => (
+                                0,
+                                match self.eval_expression(&args[0])? {
+                                    Value::Integer(i) => i,
+                                    Value::Float(f) => f as i64,
+                                    _ => 0,
+                                },
+                                1,
+                            ),
+                            2 => (
+                                match self.eval_expression(&args[0])? {
+                                    Value::Integer(i) => i,
+                                    Value::Float(f) => f as i64,
+                                    _ => 0,
+                                },
+                                match self.eval_expression(&args[1])? {
+                                    Value::Integer(i) => i,
+                                    Value::Float(f) => f as i64,
+                                    _ => 0,
+                                },
+                                1,
+                            ),
+                            3 => (
+                                match self.eval_expression(&args[0])? {
+                                    Value::Integer(i) => i,
+                                    Value::Float(f) => f as i64,
+                                    _ => 0,
+                                },
+                                match self.eval_expression(&args[1])? {
+                                    Value::Integer(i) => i,
+                                    Value::Float(f) => f as i64,
+                                    _ => 0,
+                                },
+                                match self.eval_expression(&args[2])? {
+                                    Value::Integer(i) => i,
+                                    Value::Float(f) => f as i64,
+                                    _ => 1,
+                                },
+                            ),
+                            _ => return Err("range expects 1, 2, or 3 arguments".to_string()),
+                        };
+
+                        let mut val = start;
+                        if step > 0 {
+                            while val < end {
+                                fields.insert(count.to_string(), Value::Integer(val));
+                                count += 1;
+                                val += step;
+                            }
+                        } else if step < 0 {
+                            while val > end {
+                                fields.insert(count.to_string(), Value::Integer(val));
+                                count += 1;
+                                val += step;
+                            }
+                        }
+                        fields.insert("length".to_string(), Value::Integer(count as i64));
+                        let arr_obj = ObjectInstance {
+                            class_name: "Array".to_string(),
+                            fields,
+                        };
+                        Ok(Value::Object(Arc::new(Mutex::new(arr_obj))))
                     }
                     "len" => {
                         if let Some(arg) = args.first() {

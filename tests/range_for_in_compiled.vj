@@ -1,0 +1,27 @@
+# tests/range_for_in_compiled.vj
+
+@main
+fn main():
+    # 1. Test range(end)
+    println("--- compiled range(5) ---")
+    for i in range(5):
+        likho(i, " ")
+    println("")
+
+    # 2. Test range(start, end)
+    println("--- compiled range(2, 7) ---")
+    for i in range(2, 7):
+        likho(i, " ")
+    println("")
+
+    # 3. Test range(start, end, step)
+    println("--- compiled range(1, 10, 2) ---")
+    for i in range(1, 10, 2):
+        likho(i, " ")
+    println("")
+
+    # 4. Test range with negative step
+    println("--- compiled range(10, 2, -2) ---")
+    for i in range(10, 2, -2):
+        likho(i, " ")
+    println("")

@@ -867,6 +867,7 @@ impl<'m> X86_64Codegen<'m> {
             IrInstr::AtomicAdd(ptr, val) => {
                 self.load_operands(fg, *ptr, *val)?;
                 fg.invalidate_reg(Reg::Rcx);
+                fg.code.extend_from_slice(&[0x48, 0x83, 0xE9, 0x01]); // sub rcx, 1
                 fg.code.extend_from_slice(&[0xF0, 0x48, 0x0F, 0xC1, 0x08]); // lock xadd [rax], rcx
             }
             IrInstr::Phi(dst, _) => {

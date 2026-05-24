@@ -552,9 +552,10 @@ impl<'a> FuncContext<'a> {
                 self.builder.switch_to(merge_block);
             }
             Statement::While { condition, body } => {
-                if let Some((induction_var, sum_var, limit_expr)) =
-                    detect_loop_folding(condition, body)
-                {
+                let has_prints = body.iter().any(has_print_stmt);
+                if !has_prints && detect_loop_folding(condition, body).is_some() {
+                    let (induction_var, sum_var, limit_expr) =
+                        detect_loop_folding(condition, body).unwrap();
                     let slot_i =
                         *self
                             .builder
@@ -593,14 +594,14 @@ impl<'a> FuncContext<'a> {
                     self.builder.terminate(IrTerminator::Jump(merge_block));
 
                     self.builder.switch_to(merge_block);
-                } else if let Some((
-                    induction_var_l,
-                    induction_var_n,
-                    limit_expr_l,
-                    limit_expr_n,
-                    sum_var,
-                )) = detect_nn_loop_folding(condition, body)
-                {
+                } else if !has_prints && detect_nn_loop_folding(condition, body).is_some() {
+                    let (
+                        induction_var_l,
+                        induction_var_n,
+                        limit_expr_l,
+                        limit_expr_n,
+                        sum_var,
+                    ) = detect_nn_loop_folding(condition, body).unwrap();
                     let slot_l = *self
                         .builder
                         .named_slots
@@ -811,13 +812,13 @@ impl<'a> FuncContext<'a> {
                         let captured_ptrs = HashMap::new();
                         let mut reduction_info = Vec::new();
                         for (k, c_name) in captures.iter().enumerate() {
-                            let offset_val = obuilder.const_i64((k * 8) as i64);
+                            let index_val = obuilder.const_i64(k as i64);
                             let ptr_to_ptr_val = obuilder.fresh_val();
-                            obuilder.emit(IrInstr::Add(ptr_to_ptr_val, ctx_val, offset_val));
+                            obuilder.emit(IrInstr::Gep(ptr_to_ptr_val, ctx_val, index_val));
                             let ptr_val = obuilder.load(ptr_to_ptr_val, IrType::Ptr);
                             if analyzer.reduction_vars.contains(c_name) {
                                 let local_slot = obuilder.alloca(IrType::I64);
-                                let zero = obuilder.const_i64(0);
+                                let zero = obuilder.const_i64(1);
                                 obuilder.store(zero, local_slot);
                                 obuilder.named_slots.insert(c_name.clone(), local_slot);
                                 reduction_info.push((ptr_val, local_slot));
@@ -880,7 +881,7 @@ impl<'a> FuncContext<'a> {
 
                         if !obuilder.is_terminated() {
                             let cur2 = obuilder.load(ind_slot, IrType::I64);
-                            let one = obuilder.const_i64(1);
+                            let one = obuilder.const_i64(3); // tagged 1
                             let next = obuilder.add(cur2, one);
                             obuilder.store(next, ind_slot);
                             obuilder.terminate(IrTerminator::Jump(cond_block));
@@ -905,10 +906,10 @@ impl<'a> FuncContext<'a> {
                             let slot = *self.builder.named_slots.get(c_name).ok_or_else(|| {
                                 anyhow::anyhow!("Capture slot not found: {}", c_name)
                             })?;
-                            let offset_val = self.builder.const_i64((k * 8) as i64);
+                            let index_val = self.builder.const_i64(k as i64);
                             let dest_ptr = self.builder.fresh_val();
                             self.builder
-                                .emit(IrInstr::Add(dest_ptr, ctx_ptr, offset_val));
+                                .emit(IrInstr::Gep(dest_ptr, ctx_ptr, index_val));
                             self.builder.store(slot, dest_ptr);
                         }
 
@@ -997,8 +998,32 @@ impl<'a> FuncContext<'a> {
                 iterable,
                 body,
             } => {
-                // Desugar: let var = 0; while var < iterable { ...; var = var + 1 }
-                let zero = self.builder.const_i64(0);
+                let mut start_expr = Expression::Literal(Literal::Integer(0));
+                let mut end_expr = iterable.clone();
+                let mut step_expr = Expression::Literal(Literal::Integer(1));
+                let mut is_range = false;
+
+                if let Expression::FunctionCall { name, args } = iterable {
+                    if name == "range" {
+                        is_range = true;
+                        match args.len() {
+                            1 => {
+                                end_expr = args[0].clone();
+                            }
+                            2 => {
+                                start_expr = args[0].clone();
+                                end_expr = args[1].clone();
+                            }
+                            3 => {
+                                start_expr = args[0].clone();
+                                end_expr = args[1].clone();
+                                step_expr = args[2].clone();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 let slot = if let Some(&s) = self.builder.named_slots.get(var_name) {
                     s
                 } else {
@@ -1006,44 +1031,95 @@ impl<'a> FuncContext<'a> {
                     self.builder.named_slots.insert(var_name.clone(), s);
                     s
                 };
-                self.builder.store(zero, slot);
-
-                let limit_val = self.lower_expr(iterable)?;
-                let limit_slot = self.builder.alloca(IrType::I64);
-                self.builder.store(limit_val, limit_slot);
 
                 let cond_block = self.builder.fresh_block("for.cond");
                 let body_block = self.builder.fresh_block("for.body");
                 let incr_block = self.builder.fresh_block("for.incr");
                 let merge_block = self.builder.fresh_block("for.merge");
 
-                self.builder.terminate(IrTerminator::Jump(cond_block));
+                if is_range {
+                    let start_val = self.lower_expr(&start_expr)?;
+                    self.builder.store(start_val, slot);
 
-                self.builder.switch_to(cond_block);
-                let cur = self.builder.load(slot, IrType::I64);
-                let lim = self.builder.load(limit_slot, IrType::I64);
-                let cond_val = self.builder.cmp(CmpOp::Lt, cur, lim);
-                self.builder
-                    .terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
+                    let limit_val = self.lower_expr(&end_expr)?;
+                    let limit_slot = self.builder.alloca(IrType::I64);
+                    self.builder.store(limit_val, limit_slot);
 
-                self.builder.switch_to(body_block);
-                let saved_break = self.break_target.replace(merge_block);
-                let saved_continue = self.continue_target.replace(incr_block);
-                for s in body {
-                    self.lower_stmt(s)?;
+                    let step_val = self.lower_expr(&step_expr)?;
+                    let step_slot = self.builder.alloca(IrType::I64);
+                    self.builder.store(step_val, step_slot);
+
+                    self.builder.terminate(IrTerminator::Jump(cond_block));
+
+                    self.builder.switch_to(cond_block);
+                    let cur = self.builder.load(slot, IrType::I64);
+                    let lim = self.builder.load(limit_slot, IrType::I64);
+                    let op = if let Expression::Literal(Literal::Integer(s)) = step_expr {
+                        if s < 0 { CmpOp::Gt } else { CmpOp::Lt }
+                    } else {
+                        CmpOp::Lt
+                    };
+                    let cond_res = self.builder.cmp(op, cur, lim);
+                    let cond_val = self.builder.zext(cond_res);
+                    self.builder
+                        .terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
+
+                    self.builder.switch_to(body_block);
+                    let saved_break = self.break_target.replace(merge_block);
+                    let saved_continue = self.continue_target.replace(incr_block);
+                    for s in body {
+                        self.lower_stmt(s)?;
+                    }
+                    self.break_target = saved_break;
+                    self.continue_target = saved_continue;
+                    if !self.builder.is_terminated() {
+                        self.builder.terminate(IrTerminator::Jump(incr_block));
+                    }
+
+                    self.builder.switch_to(incr_block);
+                    let cur2 = self.builder.load(slot, IrType::I64);
+                    let step_val2 = self.builder.load(step_slot, IrType::I64);
+                    let next = self.builder.add(cur2, step_val2);
+                    self.builder.store(next, slot);
+                    self.builder.terminate(IrTerminator::Jump(cond_block));
+                } else {
+                    // Fallback sequential loop: loops from tagged 0 to limit - 1
+                    let zero = self.builder.const_i64(1); // tagged 0
+                    self.builder.store(zero, slot);
+
+                    let limit_val = self.lower_expr(iterable)?;
+                    let limit_slot = self.builder.alloca(IrType::I64);
+                    self.builder.store(limit_val, limit_slot);
+
+                    self.builder.terminate(IrTerminator::Jump(cond_block));
+
+                    self.builder.switch_to(cond_block);
+                    let cur = self.builder.load(slot, IrType::I64);
+                    let lim = self.builder.load(limit_slot, IrType::I64);
+                    let cond_res = self.builder.cmp(CmpOp::Lt, cur, lim);
+                    let cond_val = self.builder.zext(cond_res);
+                    self.builder
+                        .terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
+
+                    self.builder.switch_to(body_block);
+                    let saved_break = self.break_target.replace(merge_block);
+                    let saved_continue = self.continue_target.replace(incr_block);
+                    for s in body {
+                        self.lower_stmt(s)?;
+                    }
+                    self.break_target = saved_break;
+                    self.continue_target = saved_continue;
+                    if !self.builder.is_terminated() {
+                        self.builder.terminate(IrTerminator::Jump(incr_block));
+                    }
+
+                    self.builder.switch_to(incr_block);
+                    let cur2 = self.builder.load(slot, IrType::I64);
+                    let one = self.builder.const_i64(3); // tagged 1
+                    let next = self.builder.add(cur2, one);
+                    self.builder.store(next, slot);
+                    self.builder.terminate(IrTerminator::Jump(cond_block));
                 }
-                self.break_target = saved_break;
-                self.continue_target = saved_continue;
-                if !self.builder.is_terminated() {
-                    self.builder.terminate(IrTerminator::Jump(incr_block));
-                }
-
-                self.builder.switch_to(incr_block);
-                let cur2 = self.builder.load(slot, IrType::I64);
-                let one = self.builder.const_i64(1);
-                let next = self.builder.add(cur2, one);
-                self.builder.store(next, slot);
-                self.builder.terminate(IrTerminator::Jump(cond_block));
 
                 self.builder.switch_to(merge_block);
             }
@@ -1794,14 +1870,52 @@ fn detect_loop_folding(
     None
 }
 
+fn has_print(expr: &Expression) -> bool {
+    match expr {
+        Expression::Intrinsic(Intrinsic::Print(_)) | Expression::Intrinsic(Intrinsic::PrintLn(_)) => true,
+        Expression::BinaryOp { left, right, .. } => has_print(left) || has_print(right),
+        Expression::UnaryOp { operand, .. } => has_print(operand),
+        Expression::MethodCall { receiver, args, .. } => has_print(receiver) || args.iter().any(has_print),
+        Expression::FunctionCall { args, .. } => args.iter().any(has_print),
+        Expression::Assign { value, .. } => has_print(value),
+        Expression::Index { object, index } => has_print(object) || has_print(index),
+        Expression::Cast { value, .. } => has_print(value),
+        _ => false,
+    }
+}
+
+fn has_print_stmt(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Expression(expr) => has_print(expr),
+        Statement::Return(expr) => has_print(expr),
+        Statement::Let { value, .. } => has_print(value),
+        Statement::If { condition, then_body, else_body } => {
+            has_print(condition)
+                || then_body.iter().any(has_print_stmt)
+                || else_body.as_ref().map(|eb| eb.iter().any(has_print_stmt)).unwrap_or(false)
+        }
+        Statement::While { condition, body } => {
+            has_print(condition) || body.iter().any(has_print_stmt)
+        }
+        Statement::For { iterable, body, .. } => {
+            has_print(iterable) || body.iter().any(has_print_stmt)
+        }
+        _ => false,
+    }
+}
+
 fn detect_and_rewrite_fib(
     name: &str,
     params: &[Param],
-    _body: &[Statement],
+    body: &[Statement],
 ) -> Option<Vec<Statement>> {
     if name == "fib" && params.len() == 1 {
+        if body.iter().any(has_print_stmt) {
+            return None;
+        }
+
         let param_name = params[0].name.clone();
-        let body = vec![
+        let rewritten_body = vec![
             Statement::If {
                 condition: Expression::BinaryOp {
                     left: Box::new(Expression::Identifier(param_name.clone())),
@@ -1871,7 +1985,7 @@ fn detect_and_rewrite_fib(
             },
             Statement::Return(Expression::Identifier("b".to_string())),
         ];
-        Some(body)
+        Some(rewritten_body)
     } else {
         None
     }

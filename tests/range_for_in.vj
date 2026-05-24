@@ -1,0 +1,40 @@
+# tests/range_for_in.vj
+
+@main
+fn main():
+    # 1. Test range(end)
+    println("--- range(5) ---")
+    for i in range(5):
+        likho(i, " ")
+    println("")
+
+    # 2. Test range(start, end)
+    println("--- range(2, 7) ---")
+    for i in range(2, 7):
+        likho(i, " ")
+    println("")
+
+    # 3. Test range(start, end, step)
+    println("--- range(1, 10, 2) ---")
+    for i in range(1, 10, 2):
+        likho(i, " ")
+    println("")
+
+    # 4. Test range with negative step
+    println("--- range(10, 2, -2) ---")
+    for i in range(10, 2, -2):
+        likho(i, " ")
+    println("")
+
+    # 5. Test iterating over a string
+    println("--- string iteration ---")
+    let s = "Vajra"
+    for char in s:
+        likho(char, "-")
+    println("")
+
+    # 6. Test iterating over an array
+    println("--- array iteration ---")
+    let words = s.split("a")
+    for w in words:
+        println(w)

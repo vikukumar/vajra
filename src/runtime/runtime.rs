@@ -930,12 +930,14 @@ pub unsafe extern "C" fn vajra_parallel_for(
     context: *mut c_void,
     loop_body: extern "C" fn(i64, i64, *mut c_void),
 ) {
-    let range = end - start;
+    let start_val = if is_tagged(start as u64) { untag(start as u64) } else { start };
+    let end_val = if is_tagged(end as u64) { untag(end as u64) } else { end };
+    let range = end_val - start_val;
     if range <= 0 {
         return;
     }
 
-    const MIN_ITERATIONS_PER_THREAD: i64 = 100;
+    const MIN_ITERATIONS_PER_THREAD: i64 = 100_000;
     
     let mut sys_info = core::mem::MaybeUninit::<SYSTEM_INFO>::uninit();
     GetSystemInfo(sys_info.as_mut_ptr());
@@ -956,7 +958,7 @@ pub unsafe extern "C" fn vajra_parallel_for(
     };
 
     if num_threads <= 1 {
-        loop_body(start, end, context);
+        loop_body(tag(start_val) as i64, tag(end_val) as i64, context);
         return;
     }
 
@@ -968,9 +970,9 @@ pub unsafe extern "C" fn vajra_parallel_for(
     let mut _workers_spawned = 0;
 
     for t in 1..num_threads {
-        let t_start = start + t as i64 * chunk_size;
-        let t_end = if t as i64 == num_threads as i64 - 1 { end } else { t_start + chunk_size };
-        if t_start >= end {
+        let t_start = start_val + t as i64 * chunk_size;
+        let t_end = if t as i64 == num_threads as i64 - 1 { end_val } else { t_start + chunk_size };
+        if t_start >= end_val {
             join_counter.fetch_sub(1, Ordering::SeqCst);
             continue;
         }
@@ -989,7 +991,7 @@ pub unsafe extern "C" fn vajra_parallel_for(
                 // Auto register thread
                 get_thread_idx();
 
-                (arg.loop_body)(arg.start, arg.end, arg.context);
+                (arg.loop_body)(tag(arg.start) as i64, tag(arg.end) as i64, arg.context);
 
                 (*arg.counter).fetch_sub(1, Ordering::SeqCst);
                 0
@@ -1009,14 +1011,14 @@ pub unsafe extern "C" fn vajra_parallel_for(
             CloseHandle(handle);
             _workers_spawned += 1;
         } else {
-            (loop_body)(t_start, t_end, context);
+            (loop_body)(tag(t_start) as i64, tag(t_end) as i64, context);
             join_counter.fetch_sub(1, Ordering::SeqCst);
         }
     }
 
     // Main thread execution
-    let main_end = if chunk_size < range { start + chunk_size } else { end };
-    (loop_body)(start, main_end, context);
+    let main_end = if chunk_size < range { start_val + chunk_size } else { end_val };
+    (loop_body)(tag(start_val) as i64, tag(main_end) as i64, context);
 
     // Spin wait
     while join_counter.load(Ordering::SeqCst) > 0 {
@@ -1032,8 +1034,10 @@ pub unsafe extern "C" fn vajra_parallel_for(
     context: *mut c_void,
     loop_body: extern "C" fn(i64, i64, *mut c_void),
 ) {
-    if end > start {
-        loop_body(start, end, context);
+    let start_val = if is_tagged(start as u64) { untag(start as u64) } else { start };
+    let end_val = if is_tagged(end as u64) { untag(end as u64) } else { end };
+    if end_val > start_val {
+        loop_body(tag(start_val) as i64, tag(end_val) as i64, context);
     }
 }
 

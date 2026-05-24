@@ -3,7 +3,6 @@
 
 pub fn preprocess_source(source: &str) -> String {
     // Determine if the file is already brace-based by looking for curly braces outside of string literals and comments.
-    let mut has_braces_outside = false;
     let mut in_double_quote = false;
     let mut in_single_quote = false;
     let mut in_backtick = false;
@@ -44,17 +43,9 @@ pub fn preprocess_source(source: &str) -> String {
             '`' if !in_double_quote && !in_single_quote => {
                 in_backtick = !in_backtick;
             }
-            '{' | '}' if !in_double_quote && !in_single_quote && !in_backtick => {
-                has_braces_outside = true;
-                break;
-            }
             _ => {}
         }
         idx += 1;
-    }
-
-    if has_braces_outside {
-        return source.to_string();
     }
 
     let mut result = String::new();

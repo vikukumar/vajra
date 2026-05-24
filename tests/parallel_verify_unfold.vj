@@ -1,0 +1,13 @@
+# tests/parallel_verify_unfold.vj
+
+@main
+fn main():
+    let sum = 0
+    let layers = 1000
+    let l = 0
+    while (l < layers) {
+        let term = l * 2
+        sum = sum + term
+        l = l + 1
+    }
+    println(sum)
