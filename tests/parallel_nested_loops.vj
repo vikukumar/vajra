@@ -1,0 +1,19 @@
+# tests/parallel_nested_loops.vj
+
+@main
+fn main():
+    let sum = 0
+    let layers = 5
+    let nodes = 5
+    
+    let l = 0
+    while (l < layers) {
+        let n = 0
+        while (n < nodes) {
+            sum = sum + l + n
+            println("l =", l, "n =", n, "sum =", sum)
+            n = n + 1
+        }
+        l = l + 1
+    }
+    println("Final Sum =", sum)

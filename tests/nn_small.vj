@@ -1,48 +1,32 @@
 @main
 कार्या मुख्य() {
     अस्तु sum = 0
-    अस्तु layers = 99999999999999999999999999999999999999999999999999999999999999999999999999999999
-    अस्तु nodes = 99999999999999999999999999999999999999999999999999999999999999999999999999999999
-    //likho(layers,"\n")
-    //likho(nodes,"\n")
+    अस्तु layers = 5
+    अस्तु nodes = 5
     अस्तु l = 0
     यावत् (l < layers) {
         अस्तु t1 = l * 17
-        //likho(t1,"\n")
         अस्तु n = 0
         यावत् (n < nodes) {
             अस्तु t2 = n * 31
-            //likho(t2,"\n")
             अस्तु val = t1 + t2
-            //likho(val,"\n")
             अस्तु div = val / 10
-            //likho(div,"\n")
             अस्तु term = div * 10
-            //likho(term,"\n")
             अस्तु weight = val - term
-            //likho(weight,"\n")
             
             अस्तु val2 = l + n
-            //likho(val2,"\n")
             अस्तु div2 = val2 / 5
-            //likho(div2,"\n")
             अस्तु term2 = div2 * 5
-            //likho(term2,"\n")
             अस्तु bias = val2 - term2
-            //likho(bias,"\n")
             अस्तु t3 = weight * n
-            //likho(t3,"\n")
             अस्तु act = t3 + bias
-            //likho(act,"\n")
             चेत् (act > 5) {
                 sum = sum + act
-                //likho(sum,"\n")
+                likho(sum,"\n")
             }
             n = n + 1
-            //likho(n,"\n")
         }
         l = l + 1
-        //likho(l,"\n")
     }
     likho(sum,"\n")
 }

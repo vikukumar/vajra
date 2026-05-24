@@ -760,7 +760,7 @@ impl<'a> FuncContext<'a> {
 
                     self.builder.store(limit_l, slot_l);
                     self.builder.store(limit_n, slot_n);
-                } else if !self.in_parallel_loop && detect_induction_loop(condition, body).is_some()
+                } else if detect_induction_loop(condition, body).is_some()
                 {
                     let (induction_var, limit_expr) =
                         detect_induction_loop(condition, body).unwrap();
@@ -1024,104 +1024,98 @@ impl<'a> FuncContext<'a> {
                     }
                 }
 
-                let slot = if let Some(&s) = self.builder.named_slots.get(var_name) {
-                    s
-                } else {
-                    let s = self.builder.alloca(IrType::I64);
-                    self.builder.named_slots.insert(var_name.clone(), s);
-                    s
-                };
-
-                let cond_block = self.builder.fresh_block("for.cond");
-                let body_block = self.builder.fresh_block("for.body");
-                let incr_block = self.builder.fresh_block("for.incr");
-                let merge_block = self.builder.fresh_block("for.merge");
-
                 if is_range {
-                    let start_val = self.lower_expr(&start_expr)?;
-                    self.builder.store(start_val, slot);
-
-                    let limit_val = self.lower_expr(&end_expr)?;
-                    let limit_slot = self.builder.alloca(IrType::I64);
-                    self.builder.store(limit_val, limit_slot);
-
-                    let step_val = self.lower_expr(&step_expr)?;
-                    let step_slot = self.builder.alloca(IrType::I64);
-                    self.builder.store(step_val, step_slot);
-
-                    self.builder.terminate(IrTerminator::Jump(cond_block));
-
-                    self.builder.switch_to(cond_block);
-                    let cur = self.builder.load(slot, IrType::I64);
-                    let lim = self.builder.load(limit_slot, IrType::I64);
-                    let op = if let Expression::Literal(Literal::Integer(s)) = step_expr {
-                        if s < 0 { CmpOp::Gt } else { CmpOp::Lt }
-                    } else {
-                        CmpOp::Lt
+                    let let_var = Statement::Let {
+                        name: var_name.clone(),
+                        value: start_expr.clone(),
+                        ty: VajraType::I64,
                     };
-                    let cond_res = self.builder.cmp(op, cur, lim);
-                    let cond_val = self.builder.zext(cond_res);
-                    self.builder
-                        .terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
+                    let limit_var_name = format!("__for_limit_{}", *self.loop_count);
+                    *self.loop_count += 1;
+                    let let_limit = Statement::Let {
+                        name: limit_var_name.clone(),
+                        value: end_expr.clone(),
+                        ty: VajraType::I64,
+                    };
+                    let step_var_name = format!("__for_step_{}", *self.loop_count);
+                    *self.loop_count += 1;
+                    let let_step = Statement::Let {
+                        name: step_var_name.clone(),
+                        value: step_expr.clone(),
+                        ty: VajraType::I64,
+                    };
 
-                    self.builder.switch_to(body_block);
-                    let saved_break = self.break_target.replace(merge_block);
-                    let saved_continue = self.continue_target.replace(incr_block);
-                    for s in body {
-                        self.lower_stmt(s)?;
-                    }
-                    self.break_target = saved_break;
-                    self.continue_target = saved_continue;
-                    if !self.builder.is_terminated() {
-                        self.builder.terminate(IrTerminator::Jump(incr_block));
-                    }
+                    let incr_stmt = Statement::Expression(Expression::Assign {
+                        name: var_name.clone(),
+                        value: Box::new(Expression::BinaryOp {
+                            left: Box::new(Expression::Identifier(var_name.clone())),
+                            op: "+".to_string(),
+                            right: Box::new(Expression::Identifier(step_var_name.clone())),
+                        }),
+                    });
 
-                    self.builder.switch_to(incr_block);
-                    let cur2 = self.builder.load(slot, IrType::I64);
-                    let step_val2 = self.builder.load(step_slot, IrType::I64);
-                    let next = self.builder.add(cur2, step_val2);
-                    self.builder.store(next, slot);
-                    self.builder.terminate(IrTerminator::Jump(cond_block));
+                    let mut while_body = body.clone();
+                    while_body.push(incr_stmt);
+
+                    let op = if let Expression::Literal(Literal::Integer(s)) = step_expr {
+                        if s < 0 { ">".to_string() } else { "<".to_string() }
+                    } else {
+                        "<".to_string()
+                    };
+
+                    let while_stmt = Statement::While {
+                        condition: Expression::BinaryOp {
+                            left: Box::new(Expression::Identifier(var_name.clone())),
+                            op,
+                            right: Box::new(Expression::Identifier(limit_var_name.clone())),
+                        },
+                        body: while_body,
+                    };
+
+                    self.lower_stmt(&let_var)?;
+                    self.lower_stmt(&let_limit)?;
+                    self.lower_stmt(&let_step)?;
+                    self.lower_stmt(&while_stmt)?;
                 } else {
-                    // Fallback sequential loop: loops from tagged 0 to limit - 1
-                    let zero = self.builder.const_i64(1); // tagged 0
-                    self.builder.store(zero, slot);
+                    // Non-range fallback desugaring: loops index from 0 to iterable
+                    let let_var = Statement::Let {
+                        name: var_name.clone(),
+                        value: start_expr.clone(),
+                        ty: VajraType::I64,
+                    };
+                    let limit_var_name = format!("__for_limit_{}", *self.loop_count);
+                    *self.loop_count += 1;
+                    let let_limit = Statement::Let {
+                        name: limit_var_name.clone(),
+                        value: end_expr.clone(),
+                        ty: VajraType::I64,
+                    };
 
-                    let limit_val = self.lower_expr(iterable)?;
-                    let limit_slot = self.builder.alloca(IrType::I64);
-                    self.builder.store(limit_val, limit_slot);
+                    let incr_stmt = Statement::Expression(Expression::Assign {
+                        name: var_name.clone(),
+                        value: Box::new(Expression::BinaryOp {
+                            left: Box::new(Expression::Identifier(var_name.clone())),
+                            op: "+".to_string(),
+                            right: Box::new(Expression::Literal(Literal::Integer(1))),
+                        }),
+                    });
 
-                    self.builder.terminate(IrTerminator::Jump(cond_block));
+                    let mut while_body = body.clone();
+                    while_body.push(incr_stmt);
 
-                    self.builder.switch_to(cond_block);
-                    let cur = self.builder.load(slot, IrType::I64);
-                    let lim = self.builder.load(limit_slot, IrType::I64);
-                    let cond_res = self.builder.cmp(CmpOp::Lt, cur, lim);
-                    let cond_val = self.builder.zext(cond_res);
-                    self.builder
-                        .terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
+                    let while_stmt = Statement::While {
+                        condition: Expression::BinaryOp {
+                            left: Box::new(Expression::Identifier(var_name.clone())),
+                            op: "<".to_string(),
+                            right: Box::new(Expression::Identifier(limit_var_name.clone())),
+                        },
+                        body: while_body,
+                    };
 
-                    self.builder.switch_to(body_block);
-                    let saved_break = self.break_target.replace(merge_block);
-                    let saved_continue = self.continue_target.replace(incr_block);
-                    for s in body {
-                        self.lower_stmt(s)?;
-                    }
-                    self.break_target = saved_break;
-                    self.continue_target = saved_continue;
-                    if !self.builder.is_terminated() {
-                        self.builder.terminate(IrTerminator::Jump(incr_block));
-                    }
-
-                    self.builder.switch_to(incr_block);
-                    let cur2 = self.builder.load(slot, IrType::I64);
-                    let one = self.builder.const_i64(3); // tagged 1
-                    let next = self.builder.add(cur2, one);
-                    self.builder.store(next, slot);
-                    self.builder.terminate(IrTerminator::Jump(cond_block));
+                    self.lower_stmt(&let_var)?;
+                    self.lower_stmt(&let_limit)?;
+                    self.lower_stmt(&while_stmt)?;
                 }
-
-                self.builder.switch_to(merge_block);
             }
             Statement::TryCatch {
                 try_body,

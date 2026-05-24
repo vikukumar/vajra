@@ -930,8 +930,20 @@ pub unsafe extern "C" fn vajra_parallel_for(
     context: *mut c_void,
     loop_body: extern "C" fn(i64, i64, *mut c_void),
 ) {
-    let start_val = if is_tagged(start as u64) { untag(start as u64) } else { start };
-    let end_val = if is_tagged(end as u64) { untag(end as u64) } else { end };
+    let start_val = if is_tagged(start as u64) {
+        untag(start as u64)
+    } else if start == 0 {
+        0
+    } else {
+        bigint_to_i64(start as *const BigInt).unwrap_or(0)
+    };
+    let end_val = if is_tagged(end as u64) {
+        untag(end as u64)
+    } else if end == 0 {
+        0
+    } else {
+        bigint_to_i64(end as *const BigInt).unwrap_or(i64::MAX)
+    };
     let range = end_val - start_val;
     if range <= 0 {
         return;
@@ -946,7 +958,8 @@ pub unsafe extern "C" fn vajra_parallel_for(
     let num_cores = if num_cores == 0 { 4 } else { num_cores };
     let max_threads = if num_cores > MAX_THREADS { MAX_THREADS } else { num_cores };
 
-    let num_threads = if range < MIN_ITERATIONS_PER_THREAD {
+    let is_worker = get_thread_idx() > 0;
+    let num_threads = if is_worker || range < MIN_ITERATIONS_PER_THREAD {
         1
     } else {
         let t = (range + MIN_ITERATIONS_PER_THREAD - 1) / MIN_ITERATIONS_PER_THREAD;
@@ -1034,8 +1047,20 @@ pub unsafe extern "C" fn vajra_parallel_for(
     context: *mut c_void,
     loop_body: extern "C" fn(i64, i64, *mut c_void),
 ) {
-    let start_val = if is_tagged(start as u64) { untag(start as u64) } else { start };
-    let end_val = if is_tagged(end as u64) { untag(end as u64) } else { end };
+    let start_val = if is_tagged(start as u64) {
+        untag(start as u64)
+    } else if start == 0 {
+        0
+    } else {
+        bigint_to_i64(start as *const BigInt).unwrap_or(0)
+    };
+    let end_val = if is_tagged(end as u64) {
+        untag(end as u64)
+    } else if end == 0 {
+        0
+    } else {
+        bigint_to_i64(end as *const BigInt).unwrap_or(i64::MAX)
+    };
     if end_val > start_val {
         loop_body(tag(start_val) as i64, tag(end_val) as i64, context);
     }
