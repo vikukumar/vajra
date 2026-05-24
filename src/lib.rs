@@ -1,5 +1,5 @@
 //! Vajra Compiler — Public Library API
-//! No external compiler dependency (LLVM, GCC, MSVC, Clang) — 100% self-hosted.
+//! Rust-hosted Vajra compiler core with no LLVM/GCC/MSVC/Clang dependency for Vajra program builds.
 
 #![allow(
     clippy::needless_borrows_for_generic_args,

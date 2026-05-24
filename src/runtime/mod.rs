@@ -254,5 +254,18 @@ fn generate_linux_runtime() -> Vec<u8> {
         });
     }
 
+    // vajra_parallel_for(start, end, context, loop_body) fallback:
+    // Linux cross-target object generation does not emit raw clone workers yet,
+    // so keep semantics correct by calling loop_body(start, end, context).
+    let parallel_fallback: Vec<u8> = vec![0xFF, 0xD1, 0xC3]; // call rcx; ret
+    let parallel_off = obj.append_section_data(text, &parallel_fallback, 16);
+    obj.add_symbol(Symbol {
+        name: b"vajra_parallel_for".to_vec(),
+        value: parallel_off, size: parallel_fallback.len() as u64,
+        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
+        weak: false, section: SymbolSection::Section(text),
+        flags: object::SymbolFlags::None,
+    });
+
     obj.write().unwrap_or_default()
 }

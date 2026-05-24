@@ -7,6 +7,8 @@ use crate::ir::*;
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 
+const MAX_BIGINT_DECIMAL_DIGITS: usize = 36_864;
+
 pub struct AstToIr {
     module: IrModule,
     /// function name → (param_count, is_extern)
@@ -120,16 +122,7 @@ impl AstToIr {
 
         // First pass: collect all function signatures for forward-call resolution
         for stmt in &program.statements {
-            if let Statement::Function {
-                name,
-                params,
-                is_extern,
-                ..
-            } = stmt
-            {
-                self.func_sigs
-                    .insert(name.clone(), (params.len(), *is_extern));
-            }
+            self.collect_function_signatures(stmt);
         }
 
         // Second pass: lower each statement
@@ -202,6 +195,105 @@ impl AstToIr {
         Ok(())
     }
 
+    fn collect_function_signatures(&mut self, stmt: &Statement) {
+        match stmt {
+            Statement::Function {
+                name,
+                params,
+                body,
+                is_extern,
+                ..
+            } => {
+                self.func_sigs
+                    .insert(name.clone(), (params.len(), *is_extern));
+                for nested in body {
+                    self.collect_function_signatures(nested);
+                }
+            }
+            Statement::Method { body, .. } => {
+                for nested in body {
+                    self.collect_function_signatures(nested);
+                }
+            }
+            Statement::Class { methods, .. } => {
+                for method in methods {
+                    self.collect_function_signatures(method);
+                }
+            }
+            Statement::While { body, .. } | Statement::For { body, .. } => {
+                for nested in body {
+                    self.collect_function_signatures(nested);
+                }
+            }
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                for nested in then_body {
+                    self.collect_function_signatures(nested);
+                }
+                if let Some(else_body) = else_body {
+                    for nested in else_body {
+                        self.collect_function_signatures(nested);
+                    }
+                }
+            }
+            Statement::TryCatch {
+                try_body,
+                catch_body,
+                ..
+            } => {
+                for nested in try_body {
+                    self.collect_function_signatures(nested);
+                }
+                for nested in catch_body {
+                    self.collect_function_signatures(nested);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn lower_nested_functions(&mut self, body: &[Statement]) -> Result<()> {
+        for stmt in body {
+            match stmt {
+                Statement::Function {
+                    name,
+                    params,
+                    body,
+                    is_extern,
+                    ..
+                } => {
+                    self.lower_function(name, params, body, false, *is_extern)?;
+                }
+                Statement::While { body, .. } | Statement::For { body, .. } => {
+                    self.lower_nested_functions(body)?;
+                }
+                Statement::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    self.lower_nested_functions(then_body)?;
+                    if let Some(else_body) = else_body {
+                        self.lower_nested_functions(else_body)?;
+                    }
+                }
+                Statement::TryCatch {
+                    try_body,
+                    catch_body,
+                    ..
+                } => {
+                    self.lower_nested_functions(try_body)?;
+                    self.lower_nested_functions(catch_body)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn lower_class_method(&mut self, class_name: &str, method: &Statement) -> Result<()> {
         match method {
             Statement::Method {
@@ -232,6 +324,8 @@ impl AstToIr {
         is_main: bool,
         is_extern: bool,
     ) -> Result<()> {
+        self.lower_nested_functions(body)?;
+
         let rewritten_body;
         let body = if let Some(new_body) = detect_and_rewrite_fib(name, params, body) {
             rewritten_body = new_body;
@@ -1157,7 +1251,7 @@ impl<'a> FuncContext<'a> {
                         Ok(self.builder.const_i64((val << 1) | 1))
                     } else {
                         let s = val.to_string();
-                        let (digits, sign) = parse_bigint_str(&s);
+                        let (digits, sign) = parse_bigint_str(&s)?;
                         let gname = self.intern_bigint_digits(&digits);
                         let digits_ptr = self.builder.fresh_val();
                         self.builder.emit(IrInstr::StrPtr(digits_ptr, gname));
@@ -1171,7 +1265,7 @@ impl<'a> FuncContext<'a> {
                     }
                 }
                 Literal::BigInt(s) => {
-                    let (digits, sign) = parse_bigint_str(s);
+                    let (digits, sign) = parse_bigint_str(s)?;
                     let gname = self.intern_bigint_digits(&digits);
                     let digits_ptr = self.builder.fresh_val();
                     self.builder.emit(IrInstr::StrPtr(digits_ptr, gname));
@@ -1242,6 +1336,11 @@ impl<'a> FuncContext<'a> {
                 } else {
                     match self.builder.named_slots.get(name).cloned() {
                         Some(slot) => Ok(self.builder.load(slot, IrType::I64)),
+                        None if self.func_sigs.contains_key(name) => {
+                            let fn_ptr = self.builder.fresh_val();
+                            self.builder.emit(IrInstr::StrPtr(fn_ptr, name.clone()));
+                            Ok(fn_ptr)
+                        }
                         None => bail!("Undefined variable: '{}'", name),
                     }
                 }
@@ -1384,9 +1483,34 @@ impl<'a> FuncContext<'a> {
                     _ => {}
                 }
 
+                if name == "__call__" {
+                    if args.is_empty() {
+                        bail!("Callback call requires a function value");
+                    }
+                    let func_ptr = self.lower_expr(&args[0])?;
+                    let mut compiled_args = Vec::new();
+                    for arg in &args[1..] {
+                        compiled_args.push(self.lower_expr(arg)?);
+                    }
+                    let result = self.builder.fresh_val();
+                    self.builder
+                        .emit(IrInstr::CallIndirect(result, func_ptr, compiled_args));
+                    return Ok(result);
+                }
+
                 let mut compiled_args = Vec::new();
                 for a in args {
                     compiled_args.push(self.lower_expr(a)?);
+                }
+                if !self.func_sigs.contains_key(name)
+                    && (self.builder.named_slots.contains_key(name)
+                        || self.captured_ptrs.contains_key(name))
+                {
+                    let func_ptr = self.lower_expr(&Expression::Identifier(name.clone()))?;
+                    let result = self.builder.fresh_val();
+                    self.builder
+                        .emit(IrInstr::CallIndirect(result, func_ptr, compiled_args));
+                    return Ok(result);
                 }
                 Ok(self.builder.call(name.as_str(), compiled_args))
             }
@@ -2279,10 +2403,10 @@ fn detect_nn_loop_folding(
     None
 }
 
-fn parse_bigint_str(s: &str) -> (Vec<u64>, i32) {
+fn parse_bigint_str(s: &str) -> Result<(Vec<u64>, i32)> {
     let s = s.trim();
     if s.is_empty() {
-        return (vec![0], 1);
+        return Ok((vec![0], 1));
     }
     let (s, sign) = if s.starts_with('-') {
         (&s[1..], -1)
@@ -2291,6 +2415,14 @@ fn parse_bigint_str(s: &str) -> (Vec<u64>, i32) {
     } else {
         (s, 1)
     };
+
+    if s.len() > MAX_BIGINT_DECIMAL_DIGITS {
+        bail!(
+            "BigInt literal has {} decimal digits; maximum supported literal size is {} digits",
+            s.len(),
+            MAX_BIGINT_DECIMAL_DIGITS
+        );
+    }
 
     let mut digits = Vec::new();
     let chars: Vec<char> = s.chars().collect();
@@ -2305,7 +2437,7 @@ fn parse_bigint_str(s: &str) -> (Vec<u64>, i32) {
     while digits.len() > 1 && digits.last() == Some(&0) {
         digits.pop();
     }
-    (digits, sign)
+    Ok((digits, sign))
 }
 
 // === OOP Metadata Collection and Dispatcher Generation ===

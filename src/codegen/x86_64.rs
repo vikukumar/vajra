@@ -432,7 +432,7 @@ impl<'m> X86_64Codegen<'m> {
             "vajra_runtime_init", "vajra_print_i64", "vajra_print_f64",
             "vajra_print_str", "vajra_print_auto", "vajra_alloc", "vajra_free",
             "vajra_exit", "vajra_throw", "vajra_spawn", "vajra_spawn_val",
-            "vajra_strlen", "vajra_readline", "printf",
+            "vajra_strlen", "vajra_readline", "vajra_parallel_for", "printf",
         ];
         let mut extern_sym_ids = HashMap::new();
         for &sym in &runtime_syms {

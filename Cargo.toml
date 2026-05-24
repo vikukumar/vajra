@@ -2,7 +2,7 @@
 name = "vajra"
 version = "0.1.0"
 edition = "2021"
-description = "Vajra: A self-hosted programming language — no external compiler dependency"
+description = "Vajra: a Rust-hosted programming language compiler with no external Vajra build toolchain"
 
 [dependencies]
 # Unicode support for multi-lingual identifiers (Sanskrit, Hindi, Tamil, Arabic, Chinese, etc.)

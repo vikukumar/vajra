@@ -1,0 +1,11 @@
+@main
+fn main():
+    let limit = 999999999999999999999999999999999999999999999999999999
+    let n = 0
+    while (n < limit) {
+        println(n)
+        n = n + 1
+        if (n > 3) {
+            break
+        }
+    }

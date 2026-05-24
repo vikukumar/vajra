@@ -1,0 +1,9 @@
+@main
+fn main():
+    fn twice(x):
+        return x * 2
+
+    fn runner(cb, value):
+        return cb(value)
+
+    println(runner(twice, 21))

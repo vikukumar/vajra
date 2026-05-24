@@ -23,14 +23,17 @@ jobs:
             target_name: linux-x86_64
             binary_name: vajrac
             archive_name: vajrac-linux-x86_64.tar.gz
+            rust_target: x86_64-unknown-linux-musl
           - os: macos-latest
             target_name: macos-aarch64
             binary_name: vajrac
             archive_name: vajrac-macos-aarch64.tar.gz
+            rust_target: aarch64-apple-darwin
           - os: windows-latest
             target_name: windows-x86_64
             binary_name: vajrac.exe
             archive_name: vajrac-windows-x86_64.zip
+            rust_target: x86_64-pc-windows-gnu
 
     steps:
     - name: Checkout Code
@@ -60,21 +63,24 @@ jobs:
         rustup toolchain install stable-x86_64-pc-windows-gnu --component clippy
         rustup default stable-x86_64-pc-windows-gnu
 
+    - name: Add Release Target
+      run: rustup target add ${{ matrix.rust_target }}
+
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
 
     - name: Compile Release Binary
-      run: cargo build --release
+      run: cargo build --release --target ${{ matrix.rust_target }}
 
     - name: Package Binary Asset (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        Compress-Archive -Path target/release/vajrac.exe -DestinationPath ${{ matrix.archive_name }}
+        Compress-Archive -Path target/${{ matrix.rust_target }}/release/vajrac.exe -DestinationPath ${{ matrix.archive_name }}
 
     - name: Package Binary Asset (Linux & macOS)
       if: matrix.os != 'windows-latest'
       run: |
-        tar -czvf ${{ matrix.archive_name }} -C target/release ${{ matrix.binary_name }}
+        tar -czvf ${{ matrix.archive_name }} -C target/${{ matrix.rust_target }}/release ${{ matrix.binary_name }}
 
     - name: Upload Binary to GitHub Release
       uses: softprops/action-gh-release@v2

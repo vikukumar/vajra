@@ -500,8 +500,11 @@ impl<'a> Parser<'a> {
                                 Expression::MethodCall { receiver: object, method: property, args }
                             }
                         }
-                        _other => {
-                            Expression::FunctionCall { name: "__call__".into(), args }
+                        other => {
+                            let mut call_args = Vec::with_capacity(args.len() + 1);
+                            call_args.push(other);
+                            call_args.extend(args);
+                            Expression::FunctionCall { name: "__call__".into(), args: call_args }
                         }
                     };
                 }
@@ -770,6 +773,12 @@ impl<'a> Parser<'a> {
                 self.next_token();
                 let expr = self.parse_expression(0);
                 if self.cur_token.kind == TokenKind::RParen { self.next_token(); }
+                expr
+            }
+            TokenKind::LBracket => {
+                self.next_token();
+                let expr = self.parse_expression(0);
+                if self.cur_token.kind == TokenKind::RBracket { self.next_token(); }
                 expr
             }
             TokenKind::Identifier(id) => {

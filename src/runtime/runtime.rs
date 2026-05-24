@@ -61,6 +61,13 @@ extern "system" {
         lpNumberOfBytesWritten: *mut u32,
         lpOverlapped: *mut c_void,
     ) -> i32;
+    fn ReadFile(
+        hFile: *mut c_void,
+        lpBuffer: *mut u8,
+        nNumberOfBytesToRead: u32,
+        lpNumberOfBytesRead: *mut u32,
+        lpOverlapped: *mut c_void,
+    ) -> i32;
     fn ExitProcess(uExitCode: u32) -> !;
     fn VirtualAlloc(
         lpAddress: *mut c_void,
@@ -231,10 +238,14 @@ unsafe fn sys_exit(_status: i32) -> ! {
 }
 
 const MAX_THREADS: usize = 64;
-const HEAP_SIZE: usize = 512 * 1024 * 1024; // 512 MB TLAB per thread
+const HEAP_SIZE: usize = 16 * 1024 * 1024; // 16 MB TLAB per thread
+const MAX_BIGINT_LIMBS: usize = 4096;
+const MAX_BIGINT_MUL_WORK: usize = 1_000_000;
 
 #[cfg(target_os = "windows")]
 static mut G_STDOUT: *mut c_void = core::ptr::null_mut();
+#[cfg(target_os = "windows")]
+static mut G_STDIN: *mut c_void = core::ptr::null_mut();
 
 static mut G_THREAD_IDS: [u64; MAX_THREADS] = [0; MAX_THREADS];
 static mut G_HEAP_STARTS: [*mut u8; MAX_THREADS] = [core::ptr::null_mut(); MAX_THREADS];
@@ -243,6 +254,16 @@ static mut G_HEAP_LIMITS: [usize; MAX_THREADS] = [0; MAX_THREADS];
 static mut G_STACK_BASES: [*mut u8; MAX_THREADS] = [core::ptr::null_mut(); MAX_THREADS];
 
 // Removed G_THREAD_IDX_COUNTER to use lock-free slot scanning instead
+
+#[cfg(target_os = "windows")]
+fn allocation_failed(ptr: *mut c_void) -> bool {
+    ptr.is_null()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn allocation_failed(ptr: *mut c_void) -> bool {
+    ptr.is_null() || ptr as isize == -1
+}
 
 #[repr(C)]
 struct AllocHeader {
@@ -292,6 +313,9 @@ unsafe fn get_thread_idx() -> usize {
                 0x3000, // MEM_COMMIT | MEM_RESERVE
                 0x04,   // PAGE_READWRITE
             );
+            if allocation_failed(heap) {
+                continue;
+            }
             *G_HEAP_STARTS.as_mut_ptr().add(i) = heap as *mut u8;
             *G_HEAP_LIMITS.as_mut_ptr().add(i) = HEAP_SIZE;
             *G_HEAP_BUMPS.as_mut_ptr().add(i) = 0;
@@ -311,6 +335,19 @@ unsafe fn print_raw(buf: *const u8, len: usize) {
         G_STDOUT = GetStdHandle(-11);
     }
     WriteFile(G_STDOUT, buf, len as u32, &mut written, core::ptr::null_mut());
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn read_raw(buf: *mut u8, len: usize) -> usize {
+    let mut read: u32 = 0;
+    if G_STDIN.is_null() {
+        G_STDIN = GetStdHandle(-10);
+    }
+    if ReadFile(G_STDIN, buf, len as u32, &mut read, core::ptr::null_mut()) == 0 {
+        0
+    } else {
+        read as usize
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -347,6 +384,9 @@ unsafe fn get_thread_idx() -> usize {
                 -1,
                 0,
             );
+            if allocation_failed(heap) {
+                continue;
+            }
             *G_HEAP_STARTS.as_mut_ptr().add(i) = heap as *mut u8;
             *G_HEAP_LIMITS.as_mut_ptr().add(i) = HEAP_SIZE;
             *G_HEAP_BUMPS.as_mut_ptr().add(i) = 0;
@@ -362,6 +402,12 @@ unsafe fn get_thread_idx() -> usize {
 #[cfg(not(target_os = "windows"))]
 unsafe fn print_raw(buf: *const u8, len: usize) {
     sys_write(1, buf, len);
+}
+
+#[cfg(not(target_os = "windows"))]
+unsafe fn read_raw(buf: *mut u8, len: usize) -> usize {
+    let read = sys_read(0, buf, len);
+    if read < 0 { 0 } else { read as usize }
 }
 
 unsafe fn print_i64_nn(val: i64) {
@@ -641,8 +687,19 @@ pub unsafe extern "C" fn vajra_spawn_val(
 
 #[no_mangle]
 pub unsafe extern "C" fn vajra_readline() -> *mut u8 {
-    // Readline placeholder: return null for now
-    core::ptr::null_mut()
+    const MAX_LINE: usize = 4096;
+    let buf = vajra_alloc(MAX_LINE + 1);
+    let mut n = read_raw(buf, MAX_LINE);
+    while n > 0 {
+        let c = *buf.add(n - 1);
+        if c == b'\n' || c == b'\r' {
+            n -= 1;
+        } else {
+            break;
+        }
+    }
+    *buf.add(n) = 0;
+    buf
 }
 
 static mut G_VERBOSE: bool = false;
@@ -716,6 +773,7 @@ pub unsafe extern "C" fn vajra_runtime_init() {
     SetConsoleOutputCP(65001);
 
     G_STDOUT = GetStdHandle(-11);
+    G_STDIN = GetStdHandle(-10);
     
     // Initialize main thread state
     let tid = get_thread_id();
@@ -728,6 +786,9 @@ pub unsafe extern "C" fn vajra_runtime_init() {
         0x3000, // MEM_COMMIT | MEM_RESERVE
         0x04,   // PAGE_READWRITE
     );
+    if allocation_failed(heap) {
+        vajra_throw(b"Heap allocation failure\0".as_ptr());
+    }
     *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
     *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
     *G_HEAP_BUMPS.as_mut_ptr().add(0) = 0;
@@ -756,6 +817,9 @@ pub unsafe extern "C" fn vajra_runtime_init() {
         -1,
         0,
     );
+    if allocation_failed(heap) {
+        vajra_throw(b"Heap allocation failure\0".as_ptr());
+    }
     *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
     *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
     *G_HEAP_BUMPS.as_mut_ptr().add(0) = 0;
@@ -766,8 +830,16 @@ pub unsafe extern "C" fn vajra_runtime_init() {
 
 #[no_mangle]
 pub unsafe extern "C" fn vajra_alloc(size: usize) -> *mut u8 {
-    let size = (size + 7) & !7;
-    let total_size = size + 8;
+    let Some(size) = size.checked_add(7) else {
+        vajra_throw(b"Allocation size overflow\0".as_ptr());
+    };
+    let size = size & !7;
+    let Some(total_size) = size.checked_add(8) else {
+        vajra_throw(b"Allocation size overflow\0".as_ptr());
+    };
+    if total_size > HEAP_SIZE {
+        vajra_throw(b"Allocation exceeds heap limit\0".as_ptr());
+    }
 
     let idx = get_thread_idx();
     let bump = *G_HEAP_BUMPS.as_ptr().add(idx);
@@ -1069,6 +1141,9 @@ pub unsafe extern "C" fn vajra_parallel_for(
 // --- BigInt Implementation ---
 
 unsafe fn alloc_bigint(len: usize) -> *mut BigInt {
+    if len > MAX_BIGINT_LIMBS {
+        vajra_throw(b"BigInt too large\0".as_ptr());
+    }
     let b = vajra_alloc(core::mem::size_of::<BigInt>()) as *mut BigInt;
     if len > 0 {
         let d = vajra_alloc(len * core::mem::size_of::<u64>()) as *mut u64;
@@ -1177,6 +1252,9 @@ unsafe fn bigint_add_abs(a: *const BigInt, b: *const BigInt) -> *mut BigInt {
     let len_a = (*a).len as usize;
     let len_b = (*b).len as usize;
     let max_len = if len_a > len_b { len_a } else { len_b };
+    if max_len >= MAX_BIGINT_LIMBS {
+        vajra_throw(b"BigInt addition exceeds limit\0".as_ptr());
+    }
     let res = alloc_bigint(max_len + 1);
     
     let mut carry = 0u64;
@@ -1264,9 +1342,21 @@ unsafe fn bigint_mul(a: *const BigInt, b: *const BigInt) -> *mut BigInt {
     if len_a == 0 || len_b == 0 {
         return alloc_bigint(0);
     }
+    let Some(result_len) = len_a.checked_add(len_b) else {
+        vajra_throw(b"BigInt multiplication size overflow\0".as_ptr());
+    };
+    if result_len > MAX_BIGINT_LIMBS {
+        vajra_throw(b"BigInt multiplication exceeds limit\0".as_ptr());
+    }
+    let Some(work) = len_a.checked_mul(len_b) else {
+        vajra_throw(b"BigInt multiplication work overflow\0".as_ptr());
+    };
+    if work > MAX_BIGINT_MUL_WORK {
+        vajra_throw(b"BigInt multiplication work limit exceeded\0".as_ptr());
+    }
     
-    let res = alloc_bigint(len_a + len_b);
-    for i in 0..(len_a + len_b) {
+    let res = alloc_bigint(result_len);
+    for i in 0..result_len {
         *(*res).digits.add(i) = 0;
     }
     
@@ -1292,6 +1382,9 @@ unsafe fn bigint_mul(a: *const BigInt, b: *const BigInt) -> *mut BigInt {
 
 unsafe fn bigint_shl_1(a: *const BigInt) -> *mut BigInt {
     let len = (*a).len as usize;
+    if len >= MAX_BIGINT_LIMBS {
+        vajra_throw(b"BigInt shift exceeds limit\0".as_ptr());
+    }
     let res = alloc_bigint(len + 1);
     let mut carry = 0u64;
     for i in 0..len {
@@ -1415,6 +1508,25 @@ unsafe fn bigint_cmp(a: *const BigInt, b: *const BigInt) -> i64 {
     }
 }
 
+unsafe fn cmp_i64_bigint(a: i64, b: *const BigInt) -> i64 {
+    if (*b).len == 0 {
+        return if a < 0 { -1 } else if a > 0 { 1 } else { 0 };
+    }
+    if a < 0 && (*b).sign > 0 {
+        return -1;
+    }
+    if a >= 0 && (*b).sign < 0 {
+        return 1;
+    }
+    if (*b).len > 3 {
+        return if (*b).sign > 0 { -1 } else { 1 };
+    }
+    if let Some(b_val) = bigint_to_i64(b) {
+        return if a < b_val { -1 } else if a > b_val { 1 } else { 0 };
+    }
+    if (*b).sign > 0 { -1 } else { 1 }
+}
+
 // --- Runtime Helper Functions ---
 
 #[no_mangle]
@@ -1423,6 +1535,9 @@ pub unsafe extern "C" fn vajra_bigint_from_digits(
     len: i64,
     sign: i64,
 ) -> *mut BigInt {
+    if len < 0 || len as usize > MAX_BIGINT_LIMBS {
+        vajra_throw(b"BigInt literal exceeds limit\0".as_ptr());
+    }
     let b = alloc_bigint(len as usize);
     (*b).sign = sign;
     for i in 0..(len as usize) {
@@ -1852,6 +1967,13 @@ pub unsafe extern "C" fn vajra_cmp(a: u64, b: u64) -> i64 {
         let vb = untag(b);
         if va < vb { -1 } else if va > vb { 1 } else { 0 }
     } else {
+        if is_tagged(a) && is_valid_bigint(b) {
+            return cmp_i64_bigint(untag(a), b as *const BigInt);
+        }
+        if is_valid_bigint(a) && is_tagged(b) {
+            return -cmp_i64_bigint(untag(b), a as *const BigInt);
+        }
+
         let is_a_num = is_tagged(a) || is_valid_bigint(a);
         let is_b_num = is_tagged(b) || is_valid_bigint(b);
         
@@ -2481,5 +2603,3 @@ pub unsafe extern "C" fn fmod(x: f64, y: f64) -> f64 {
     let quot = (x / y) as i64;
     x - (quot as f64) * y
 }
-
-

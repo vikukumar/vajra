@@ -1,5 +1,5 @@
 //! Vajra Compiler Driver (vajrac)
-//! Version 0.1.0 — 100% Self-Hosted, No External Compiler Required
+//! Rust-hosted Vajra compiler driver.
 //! Supports: compile, run, build, test — all without LLVM, GCC, MSVC, Clang
 
 #![allow(
@@ -40,12 +40,14 @@ use vajra_core::{
     runtime,
 };
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(ClapParser, Debug)]
 #[command(
     name = "vajrac",
-    version = "0.1.0",
-    about = "Vajra: A self-hosted programming language with multi-human-language support\nNo C, LLVM, GCC, Clang, or MSVC required — truly independent.",
-    long_about = "Vajra is a self-hosted programming language featuring multi-human-language translation (English, Hindi, Sanskrit, Spanish, Chinese, Arabic, and more) at the keyword level.\n\nIt features a custom native code generator for x86-64 and a built-in linker emitting COFF/PE executables on Windows and ELF executables on Linux/macOS. No external compiler toolchains like LLVM, GCC, MSVC, or Clang are required to compile, link, and run Vajra programs.\n\nUSAGE EXAMPLES:\n  Start REPL:          vajrac\n  Interpret a file:    vajrac exec hello.vj\n  Build project:       vajrac build\n  Compile file:        vajrac compile main.vj -o main.exe --target x86_64-pc-windows-msvc"
+    version,
+    about = "Vajra: a Rust-hosted programming language compiler with multi-human-language support\nNo LLVM, GCC, Clang, MSVC, or external linker is required for Vajra program builds.",
+    long_about = "Vajra is currently a Rust-hosted programming language featuring multi-human-language translation (English, Hindi, Sanskrit, Spanish, Chinese, Arabic, and more) at the keyword level.\n\nIt features a custom native code generator for x86-64 and a built-in linker emitting COFF/PE executables on Windows and ELF executables on Linux. No external compiler toolchains like LLVM, GCC, MSVC, Clang, or ld are required to compile, link, and run Vajra programs.\n\nUSAGE EXAMPLES:\n  Start REPL:          vajrac\n  Interpret a file:    vajrac exec hello.vj\n  Build project:       vajrac build\n  Compile file:        vajrac compile main.vj -o main.exe --target x86_64-pc-windows-msvc"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -196,6 +198,26 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    std::panic::set_hook(Box::new(|info| {
+        let message = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "unexpected compiler failure"
+        };
+        if let Some(location) = info.location() {
+            eprintln!(
+                "Compiler internal error at {}:{}: {}",
+                location.file(),
+                location.line(),
+                message
+            );
+        } else {
+            eprintln!("Compiler internal error: {}", message);
+        }
+    }));
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -237,7 +259,7 @@ fn cmd_compile(
     emit_ir: bool,
     emit_obj: bool,
 ) -> Result<()> {
-    eprintln!("🔰 Vajra v0.1.0 — Compiling '{}' ...", file);
+    eprintln!("🔰 Vajra v{} — Compiling '{}' ...", VERSION, file);
 
     // 1. Concurrent Compile and Merge
     let compiled_files = Arc::new(Mutex::new(HashSet::new()));
@@ -362,7 +384,7 @@ fn cmd_exec(file: &str, _extra_args: &[String]) -> Result<()> {
     let source = fs::read_to_string(file).with_context(|| format!("Cannot read '{}'", file))?;
 
     let program = parse(&source)?;
-    eprintln!("🔰 Vajra v0.1.0 — Executing '{}' (interpreter mode)", file);
+    eprintln!("🔰 Vajra v{} — Executing '{}' (interpreter mode)", VERSION, file);
 
     let mut interpreter = eval::Interpreter::new();
     if let Err(e) = interpreter.run(&program) {
@@ -376,7 +398,7 @@ fn cmd_repl() -> Result<()> {
 
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║              Vajra Language — Interactive REPL               ║");
-    println!("║  Version 0.1.0 — Self-Hosted | No External Compiler Required ║");
+    println!("║  Version {:<7} — Rust-hosted | No External Toolchain Needed ║", VERSION);
     println!("║  Languages: English, हिंदी, संस्कृत, தமிழ், العربية, 中文   ║");
     println!("║  Type 'exit' or 'quit' to leave | ':compile <code>' to emit  ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
@@ -525,8 +547,8 @@ fn cmd_ir(file: &str) -> Result<()> {
 
 fn cmd_info() {
     println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║                    Vajra Language v0.1.0                         ║");
-    println!("║        Self-Hosted — Zero External Compiler Dependency            ║");
+    println!("║                    Vajra Language v{:<7}                     ║", VERSION);
+    println!("║        Rust-hosted — Zero External Vajra Build Toolchain          ║");
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║  Backend          : Native x86-64 (pure Rust)                    ║");
     println!("║  Object Format    : COFF (Windows) / ELF (Linux)                 ║");

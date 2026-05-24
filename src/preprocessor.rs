@@ -57,16 +57,12 @@ pub fn preprocess_source(source: &str) -> String {
         let trimmed = line.trim();
 
         // Skip comments and empty lines
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
             continue;
         }
 
         // Strip comments for suffix check
-        let code_only = if let Some(idx) = trimmed.find('#') {
-            &trimmed[..idx]
-        } else {
-            trimmed
-        };
+        let code_only = strip_line_comment(trimmed);
         let code_trimmed = code_only.trim_end();
 
         if code_trimmed.ends_with(':') {
@@ -83,10 +79,12 @@ pub fn preprocess_source(source: &str) -> String {
     for line in &lines {
         let trimmed = line.trim();
 
-        // Skip empty lines or lines that are comments
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            result.push_str(line);
-            result.push('\n');
+        // Skip empty lines or full-line comments
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            if trimmed.is_empty() {
+                result.push_str(line);
+                result.push('\n');
+            }
             continue;
         }
 
@@ -142,4 +140,39 @@ pub fn preprocess_source(source: &str) -> String {
     }
 
     result
+}
+
+fn strip_line_comment(line: &str) -> &str {
+    let mut in_double_quote = false;
+    let mut in_single_quote = false;
+    let mut escaped = false;
+    let mut prev = '\0';
+
+    for (idx, c) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            prev = c;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            prev = c;
+            continue;
+        }
+        if c == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+        } else if c == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+        } else if !in_double_quote && !in_single_quote {
+            if c == '#' {
+                return &line[..idx];
+            }
+            if prev == '/' && c == '/' {
+                return &line[..idx - 1];
+            }
+        }
+        prev = c;
+    }
+
+    line
 }

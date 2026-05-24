@@ -1,0 +1,4 @@
+@main
+fn main():
+    let name = readline()
+    println(name)
