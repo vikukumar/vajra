@@ -1,5 +1,6 @@
 //! Vajra AST → IR Lowering
 //! Converts the parsed AST into target-independent Vajra IR
+#![allow(dead_code)]
 
 use crate::ast::*;
 use crate::ir::*;
