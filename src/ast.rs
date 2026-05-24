@@ -86,6 +86,12 @@ pub enum Expression {
         value: Box<Expression>,
         target_type: VajraType,
     },
+    /// Ternary conditional operator: cond ? then_expr : else_expr
+    Ternary {
+        condition: Box<Expression>,
+        then_expr: Box<Expression>,
+        else_expr: Box<Expression>,
+    },
 }
 
 #[derive(Debug, Clone)]

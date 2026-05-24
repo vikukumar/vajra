@@ -32,6 +32,7 @@ static KERNEL32_IMPORTS: &[&str] = &[
     "GetLastError",
     "LoadLibraryA",
     "GetProcAddress",
+    "GetCommandLineA",
 ];
 
 fn align_up(val: u32, align: u32) -> u32 {

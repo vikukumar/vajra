@@ -228,7 +228,6 @@ fn cmd_compile(
     emit_obj: bool,
 ) -> Result<()> {
     eprintln!("🔰 Vajra v0.1.0 — Compiling '{}' ...", file);
-    eprintln!("   No LLVM, GCC, MSVC, or Clang required");
 
     // 1. Concurrent Compile and Merge
     let compiled_files = Arc::new(Mutex::new(HashSet::new()));
@@ -329,13 +328,14 @@ fn cmd_lint(file: &str) -> Result<()> {
     linter.lint_program(&program);
     if linter.warnings.is_empty() {
         println!("✨ No lint warnings found in '{}'.", file);
+        Ok(())
     } else {
         println!("⚠️ Found {} lint warnings in '{}':", linter.warnings.len(), file);
         for warning in &linter.warnings {
             println!("  {}", warning);
         }
+        anyhow::bail!("Linting failed with {} warnings", linter.warnings.len())
     }
-    Ok(())
 }
 
 fn cmd_exec(file: &str, _extra_args: &[String]) -> Result<()> {
@@ -347,7 +347,9 @@ fn cmd_exec(file: &str, _extra_args: &[String]) -> Result<()> {
     eprintln!("🔰 Vajra v0.1.0 — Executing '{}' (interpreter mode)", file);
 
     let mut interpreter = eval::Interpreter::new();
-    interpreter.run(&program);
+    if let Err(e) = interpreter.run(&program) {
+        anyhow::bail!("Runtime error: {}", e);
+    }
     Ok(())
 }
 
@@ -443,7 +445,9 @@ fn cmd_repl() -> Result<()> {
                 Ok(p) => p,
                 Err(e) => { eprintln!("Parse error: {}", e); continue; }
             };
-            interpreter.run(&program);
+            if let Err(e) = interpreter.run(&program) {
+                eprintln!("❌ Runtime error: {}", e);
+            }
         }
     }
     Ok(())

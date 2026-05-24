@@ -1,0 +1,36 @@
+# tests/advanced_features.vj
+
+@main
+fn main():
+    let name = "Vajra"
+    let greeting = f"Hello {name}"
+    println(greeting)
+
+    let count = 42
+    let msg1 = f"Hello {name} count is {count}"
+    println(msg1)
+
+    let msg2 = `General ${name} count ${count}`
+    println(msg2)
+
+    let fast_msg = f"{name} is fast!"
+    println(fast_msg)
+
+    # Exponentiation
+    let pow1 = 2 ** 10
+    println(pow1)
+
+    let pow2 = 2.5 ** 2
+    println(pow2)
+
+    let pow3 = 10 ** 2
+    println(pow3)
+
+    # Ternary
+    let cond1 = true
+    let res1 = cond1 ? "yes" : "no"
+    println(res1)
+
+    let cond2 = false
+    let res2 = cond2 ? "yes" : "no"
+    println(res2)

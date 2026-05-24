@@ -86,6 +86,8 @@ pub enum TokenKind {
     MulAssign,    // *=
     DivAssign,    // /=
     At,           // @ (for decorators)
+    Pow,          // **
+    Question,     // ?
 
     // Whitespace/Flow
     Newline,
@@ -371,6 +373,10 @@ lazy_static! {
         // ── Hinglish ────────────────────────────────────────────────────────
         m.insert("rakho",     TokenKind::Let);
         m.insert("lelo",      TokenKind::Let);
+        m.insert("maan",      TokenKind::Let);
+        m.insert("dharo",     TokenKind::Let);
+        m.insert("astu",      TokenKind::Let);
+        m.insert("rakh",      TokenKind::Let);
         m.insert("agar",      TokenKind::If);
         m.insert("warna",     TokenKind::Else);
         m.insert("nahi_to",   TokenKind::Else);
@@ -385,12 +391,17 @@ lazy_static! {
         m.insert("apna",      TokenKind::This);
         m.insert("apne",      TokenKind::This);
         m.insert("khud",      TokenKind::This);
+        m.insert("swayam",    TokenKind::This);
+        m.insert("mera",      TokenKind::This);
+        m.insert("khud_ka",   TokenKind::This);
         m.insert("karya",     TokenKind::Function);
+        m.insert("kriya",     TokenKind::Function);
         m.insert("kam",       TokenKind::Function);
         m.insert("kam_karo",  TokenKind::Function);
         m.insert("vidhi",     TokenKind::Function);
         m.insert("tarika",    TokenKind::Function);
         m.insert("dhancha",   TokenKind::Class);
+
 
         // ── Bhojpuri (भोजपुरी) ────────────────────────────────────────────────
         m.insert("कारज",      TokenKind::Function);
@@ -499,6 +510,7 @@ impl<'a> Lexer<'a> {
                     TokenKind::Colon
                 }
             }
+            "?" => TokenKind::Question,
             "(" => TokenKind::LParen,
             ")" => TokenKind::RParen,
             "{" => TokenKind::LBrace,
@@ -534,7 +546,8 @@ impl<'a> Lexer<'a> {
                 else { TokenKind::Minus }
             }
             "*" => {
-                if let Some(&"=") = self.peek() { self.advance(); TokenKind::MulAssign }
+                if let Some(&"*") = self.peek() { self.advance(); TokenKind::Pow }
+                else if let Some(&"=") = self.peek() { self.advance(); TokenKind::MulAssign }
                 else { TokenKind::Star }
             }
             "/" => {

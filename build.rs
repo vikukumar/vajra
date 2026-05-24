@@ -1,6 +1,6 @@
-use std::process::Command;
 use std::env;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
@@ -9,11 +9,13 @@ fn main() {
     println!("cargo:rerun-if-changed=src/runtime/runtime.rs");
 
     let status = Command::new("rustc")
-        .args(&[
+        .args([
             "--crate-type=staticlib",
             "--emit=obj",
-            "-C", "panic=abort",
-            "-C", "opt-level=3",
+            "-C",
+            "panic=abort",
+            "-C",
+            "opt-level=3",
             "src/runtime/runtime.rs",
             "-o",
             dest_path.to_str().unwrap(),

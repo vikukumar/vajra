@@ -128,7 +128,7 @@ impl Interpreter {
     }
 
     /// Run a program (used by REPL and exec mode)
-    pub fn run(&mut self, program: &Program) {
+    pub fn run(&mut self, program: &Program) -> Result<(), String> {
         // First pass: hoist function definitions
         for stmt in &program.statements {
             self.hoist_functions(stmt);
@@ -149,10 +149,7 @@ impl Interpreter {
                 _ => {}
             }
             if !is_fn {
-                match self.eval_statement(stmt) {
-                    Ok(_) => {}
-                    Err(e) => eprintln!("❌ Runtime error: {}", e),
-                }
+                self.eval_statement(stmt)?;
             }
         }
         // Auto-invoke main if it exists
@@ -161,12 +158,9 @@ impl Interpreter {
                 name,
                 args: vec![],
             });
-            match self.eval_statement(&main_call) {
-                Ok(_) => {}
-                Err(e) => eprintln!("❌ main() error: {}", e),
-            }
+            self.eval_statement(&main_call)?;
         }
-
+        Ok(())
     }
 
     fn hoist_functions(&mut self, stmt: &Statement) {
@@ -360,6 +354,15 @@ impl Interpreter {
                 Literal::Bool(b) => Ok(Value::Bool(*b)),
                 Literal::Null => Ok(Value::Null),
             },
+
+            Expression::Ternary { condition, then_expr, else_expr } => {
+                let cond_val = self.eval_expression(condition)?;
+                if is_truthy(&cond_val) {
+                    self.eval_expression(then_expr)
+                } else {
+                    self.eval_expression(else_expr)
+                }
+            }
 
             Expression::Identifier(name) => {
                 self.get_var(name)
@@ -1014,6 +1017,28 @@ fn is_truthy(v: &Value) -> bool {
 }
 
 fn eval_binary_op(lhs: &Value, op: &str, rhs: &Value) -> Result<Value, String> {
+    if op == "**" {
+        let base = match lhs {
+            Value::Integer(i) => *i as f64,
+            Value::Float(f) => *f,
+            _ => return Err("Exponentiation requires numeric base".to_string()),
+        };
+        let exponent = match rhs {
+            Value::Integer(i) => *i as f64,
+            Value::Float(f) => *f,
+            _ => return Err("Exponentiation requires numeric exponent".to_string()),
+        };
+        let res = base.powf(exponent);
+        if let (Value::Integer(a), Value::Integer(b)) = (lhs, rhs) {
+            if *b >= 0 {
+                if let Some(pow_res) = a.checked_pow(*b as u32) {
+                    return Ok(Value::Integer(pow_res));
+                }
+            }
+        }
+        return Ok(Value::Float(res));
+    }
+
     // Coerce types
     match (lhs, rhs) {
         // Float operations

@@ -84,6 +84,7 @@ extern "system" {
     ) -> *mut c_void;
     fn CloseHandle(hObject: *mut c_void) -> i32;
     fn GetSystemInfo(lpSystemInfo: *mut SYSTEM_INFO);
+    fn GetCommandLineA() -> *const u8;
 }
 
 #[cfg(target_os = "windows")]
@@ -148,6 +149,59 @@ unsafe fn sys_mmap(
     );
     ret
 }
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_open(path: *const u8, flags: i32, mode: i32) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 2, // SYS_open
+        in("rdi") path,
+        in("rsi") flags,
+        in("rdx") mode,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_read(fd: isize, buf: *mut u8, count: usize) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 0, // SYS_read
+        in("rdi") fd,
+        in("rsi") buf,
+        in("rdx") count,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
+unsafe fn sys_close(fd: isize) -> isize {
+    let ret: isize;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 3, // SYS_close
+        in("rdi") fd,
+        out("rcx") _,
+        out("r11") _,
+        lateout("rax") ret,
+    );
+    ret
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_arch = "x86_64")))]
+unsafe fn sys_open(_path: *const u8, _flags: i32, _mode: i32) -> isize { 0 }
+#[cfg(all(not(target_os = "windows"), not(target_arch = "x86_64")))]
+unsafe fn sys_read(_fd: isize, _buf: *mut u8, _count: usize) -> isize { 0 }
+#[cfg(all(not(target_os = "windows"), not(target_arch = "x86_64")))]
+unsafe fn sys_close(_fd: isize) -> isize { 0 }
 
 #[cfg(all(not(target_os = "windows"), not(target_arch = "x86_64")))]
 unsafe fn sys_mmap(
@@ -400,7 +454,6 @@ pub unsafe extern "C" fn vajra_print_i64(val: i64) {
         let b = uval as *const BigInt;
         print_bigint_nn(b);
     }
-    print_raw(EOL.as_ptr(), EOL.len());
 }
 
 fn f64_is_nan(v: f64) -> bool {
@@ -418,16 +471,13 @@ pub unsafe extern "C" fn vajra_print_f64(val: f64) {
     let mut v = val;
     if f64_is_nan(v) {
         print_raw(b"NaN".as_ptr(), 3);
-        print_raw(EOL.as_ptr(), EOL.len());
         return;
     }
     if f64_is_infinite(v) {
         if v < 0.0 {
             print_raw(b"-inf".as_ptr(), 4);
-            print_raw(EOL.as_ptr(), EOL.len());
         } else {
             print_raw(b"inf".as_ptr(), 3);
-            print_raw(EOL.as_ptr(), EOL.len());
         }
         return;
     }
@@ -445,7 +495,6 @@ pub unsafe extern "C" fn vajra_print_f64(val: f64) {
         print_i64_nn(digit % 10);
         frac -= digit as f64;
     }
-    print_raw(EOL.as_ptr(), EOL.len());
 }
 
 #[no_mangle]
@@ -511,9 +560,11 @@ unsafe fn is_valid_class_name_ptr(ptr: *const u8) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn vajra_print_auto(val: u64) {
-    print_raw(b"DBG print_auto: val=".as_ptr(), 20);
-    print_i64_nn(val as i64);
-    print_raw(EOL.as_ptr(), EOL.len());
+    if G_VERBOSE {
+        print_raw(b"DBG print_auto: val=".as_ptr(), 20);
+        print_i64_nn(val as i64);
+        print_raw(EOL.as_ptr(), EOL.len());
+    }
 
     if val == 0 {
         print_raw(b"null".as_ptr(), 4);
@@ -594,10 +645,74 @@ pub unsafe extern "C" fn vajra_readline() -> *mut u8 {
     core::ptr::null_mut()
 }
 
+static mut G_VERBOSE: bool = false;
+
+#[cfg(target_os = "windows")]
+unsafe fn init_verbosity() {
+    let cmd = GetCommandLineA();
+    if !cmd.is_null() {
+        let mut len = 0;
+        while *cmd.add(len) != 0 {
+            len += 1;
+        }
+        let mut i = 0;
+        while i < len {
+            if i + 3 <= len {
+                let c0 = *cmd.add(i);
+                let c1 = *cmd.add(i + 1);
+                let c2 = *cmd.add(i + 2);
+                if c0 == b'-' && c1 == b'v' && c2 == b'v' {
+                    let before_ok = i == 0 || *cmd.add(i - 1) == b' ' || *cmd.add(i - 1) == b'"';
+                    let after_ok = i + 3 == len || *cmd.add(i + 3) == b' ' || *cmd.add(i + 3) == b'"';
+                    if before_ok && after_ok {
+                        G_VERBOSE = true;
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+unsafe fn init_verbosity() {
+    let mut buf = [0u8; 1024];
+    let buf_ptr = buf.as_mut_ptr();
+    let path = b"/proc/self/cmdline\0";
+    let fd = sys_open(path.as_ptr(), 0, 0); // O_RDONLY = 0
+    if fd >= 0 {
+        let n = sys_read(fd, buf_ptr, 1024);
+        sys_close(fd);
+        if n > 0 {
+            let mut i = 0;
+            while i < n as usize {
+                let mut arg_len = 0;
+                while i + arg_len < n as usize && *buf_ptr.add(i + arg_len) != 0 {
+                    arg_len += 1;
+                }
+                if arg_len == 3 {
+                    let c0 = *buf_ptr.add(i);
+                    let c1 = *buf_ptr.add(i + 1);
+                    let c2 = *buf_ptr.add(i + 2);
+                    if c0 == b'-' && c1 == b'v' && c2 == b'v' {
+                        G_VERBOSE = true;
+                        break;
+                    }
+                }
+                i += arg_len + 1;
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 #[no_mangle]
 pub unsafe extern "C" fn vajra_runtime_init() {
-    print_raw(b"DBG: vajra_runtime_init started\n\0".as_ptr(), 33);
+    init_verbosity();
+    if G_VERBOSE {
+        print_raw(b"DBG: vajra_runtime_init started\n\0".as_ptr(), 33);
+    }
     SetConsoleOutputCP(65001);
 
     G_STDOUT = GetStdHandle(-11);
@@ -616,12 +731,18 @@ pub unsafe extern "C" fn vajra_runtime_init() {
     *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
     *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
     *G_HEAP_BUMPS.as_mut_ptr().add(0) = 0;
-    print_raw(b"DBG: vajra_runtime_init finished\n\0".as_ptr(), 34);
+    if G_VERBOSE {
+        print_raw(b"DBG: vajra_runtime_init finished\n\0".as_ptr(), 34);
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 #[no_mangle]
 pub unsafe extern "C" fn vajra_runtime_init() {
+    init_verbosity();
+    if G_VERBOSE {
+        print_raw(b"DBG: vajra_runtime_init started\n\0".as_ptr(), 33);
+    }
     // Initialize main thread state
     let tid = get_thread_id();
     *G_THREAD_IDS.as_mut_ptr().add(0) = tid;
@@ -638,6 +759,9 @@ pub unsafe extern "C" fn vajra_runtime_init() {
     *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
     *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
     *G_HEAP_BUMPS.as_mut_ptr().add(0) = 0;
+    if G_VERBOSE {
+        print_raw(b"DBG: vajra_runtime_init finished\n\0".as_ptr(), 34);
+    }
 }
 
 #[no_mangle]
@@ -1278,8 +1402,225 @@ pub unsafe extern "C" fn vajra_bigint_from_digits(
     b
 }
 
+unsafe fn is_string_val(val: u64) -> bool {
+    if val == 0 || is_tagged(val) {
+        return false;
+    }
+    if is_heap_ptr(val) {
+        let p = val as *const u64;
+        let first = *p;
+        if first == 1 || first == 1_i64 as u64 || first == -1_i64 as u64 {
+            return false;
+        }
+        if is_valid_class_name_ptr(first as *const u8) {
+            return false;
+        }
+    }
+    true
+}
+
+unsafe fn int_to_str(val: i64) -> *mut u8 {
+    let mut buf = [0u8; 32];
+    let buf_ptr = buf.as_mut_ptr();
+    let mut ptr = 32;
+    let is_neg = val < 0;
+    let mut abs_val = if is_neg {
+        if val == i64::MIN {
+            let res = vajra_alloc(21);
+            memcpy(res, b"-9223372036854775808\0".as_ptr(), 21);
+            return res;
+        }
+        -val
+    } else {
+        val
+    };
+
+    if abs_val == 0 {
+        ptr -= 1;
+        *buf_ptr.add(ptr) = b'0';
+    } else {
+        while abs_val > 0 {
+            ptr -= 1;
+            *buf_ptr.add(ptr) = b'0' + (abs_val % 10) as u8;
+            abs_val /= 10;
+        }
+    }
+
+    if is_neg {
+        ptr -= 1;
+        *buf_ptr.add(ptr) = b'-';
+    }
+
+    let len = 32 - ptr;
+    let res = vajra_alloc(len + 1);
+    memcpy(res, buf_ptr.add(ptr), len);
+    *res.add(len) = 0;
+    res
+}
+
+unsafe fn bigint_to_str(b: *const BigInt) -> *mut u8 {
+    if b.is_null() {
+        let res = vajra_alloc(5);
+        memcpy(res, b"null\0".as_ptr(), 5);
+        return res;
+    }
+    if (*b).len == 0 {
+        let res = vajra_alloc(2);
+        memcpy(res, b"0\0".as_ptr(), 2);
+        return res;
+    }
+
+    let mut temp_buf = [0u8; 1024];
+    let temp_ptr = temp_buf.as_mut_ptr();
+    let mut temp_len = 0;
+
+    let mut write_char = |c: u8| {
+        if temp_len < 1023 {
+            *temp_ptr.add(temp_len) = c;
+            temp_len += 1;
+        }
+    };
+
+    if (*b).sign < 0 {
+        write_char(b'-');
+    }
+
+    let msd_idx = (*b).len as usize - 1;
+    let mut msd_val = *(*b).digits.add(msd_idx) as i64;
+    let mut digits = [0u8; 20];
+    let digits_ptr = digits.as_mut_ptr();
+    let mut d_ptr = 20;
+    if msd_val == 0 {
+        d_ptr -= 1;
+        *digits_ptr.add(d_ptr) = b'0';
+    } else {
+        while msd_val > 0 {
+            d_ptr -= 1;
+            *digits_ptr.add(d_ptr) = b'0' + (msd_val % 10) as u8;
+            msd_val /= 10;
+        }
+    }
+    for k in d_ptr..20 {
+        write_char(*digits_ptr.add(k));
+    }
+
+    for i in (0..msd_idx).rev() {
+        let digit = *(*b).digits.add(i);
+        let mut d_val = digit;
+        let mut sub_digits = [b'0'; 9];
+        let sub_ptr = sub_digits.as_mut_ptr();
+        let mut sd_ptr = 9;
+        while d_val > 0 && sd_ptr > 0 {
+            sd_ptr -= 1;
+            *sub_ptr.add(sd_ptr) = b'0' + (d_val % 10) as u8;
+            d_val /= 10;
+        }
+        for k in 0..9 {
+            write_char(*sub_ptr.add(k));
+        }
+    }
+
+    let res = vajra_alloc(temp_len + 1);
+    memcpy(res, temp_ptr, temp_len);
+    *res.add(temp_len) = 0;
+    res
+}
+
+unsafe fn val_to_str(val: u64) -> *mut u8 {
+    if val == 0 {
+        let res = vajra_alloc(5);
+        memcpy(res, b"null\0".as_ptr(), 5);
+        return res;
+    }
+    if is_tagged(val) {
+        return int_to_str(untag(val));
+    }
+    if is_heap_ptr(val) {
+        let p = val as *const u64;
+        let first = *p;
+        if first == 1 || first == 1_i64 as u64 || first == -1_i64 as u64 {
+            return bigint_to_str(val as *const BigInt);
+        }
+        if is_valid_class_name_ptr(first as *const u8) {
+            let name_len = vajra_strlen(first as *const u8);
+            let total_len = 8 + name_len + 1;
+            let res = vajra_alloc(total_len + 1);
+            memcpy(res, b"[Object ".as_ptr(), 8);
+            memcpy(res.add(8), first as *const u8, name_len);
+            *res.add(8 + name_len) = b']';
+            *res.add(8 + name_len + 1) = 0;
+            return res;
+        }
+    }
+    val as *mut u8
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn vajra_pow(a: u64, b: u64) -> u64 {
+    if is_tagged(a) && is_tagged(b) {
+        let base = untag(a);
+        let exp = untag(b);
+        if exp >= 0 {
+            let mut res = 1i64;
+            let mut mul = base;
+            let mut temp_exp = exp;
+            let mut overflow = false;
+            while temp_exp > 0 {
+                if temp_exp & 1 == 1 {
+                    if let Some(r) = res.checked_mul(mul) {
+                        res = r;
+                    } else {
+                        overflow = true;
+                        break;
+                    }
+                }
+                if temp_exp > 1 {
+                    if let Some(m) = mul.checked_mul(mul) {
+                        mul = m;
+                    } else {
+                        overflow = true;
+                        break;
+                    }
+                }
+                temp_exp >>= 1;
+            }
+            if !overflow {
+                if res >= -4611686018427387904 && res <= 4611686018427387903 {
+                    return tag(res);
+                }
+            }
+        }
+    }
+
+    // Float pow fallback
+    let base_f = if is_tagged(a) {
+        untag(a) as f64
+    } else {
+        f64::from_bits(a)
+    };
+    let exp_f = if is_tagged(b) {
+        untag(b) as f64
+    } else {
+        f64::from_bits(b)
+    };
+    let res_f = vajra_math_pow(base_f, exp_f);
+    res_f.to_bits()
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn vajra_add(a: u64, b: u64) -> u64 {
+    if is_string_val(a) || is_string_val(b) {
+        let str_a = val_to_str(a);
+        let str_b = val_to_str(b);
+        let len_a = vajra_strlen(str_a);
+        let len_b = vajra_strlen(str_b);
+        let res = vajra_alloc(len_a + len_b + 1);
+        memcpy(res, str_a, len_a);
+        memcpy(res.add(len_a), str_b, len_b);
+        *res.add(len_a + len_b) = 0;
+        return res as u64;
+    }
+
     if is_tagged(a) && is_tagged(b) {
         let va = untag(a);
         let vb = untag(b);

@@ -935,6 +935,34 @@ impl<'a> FuncContext<'a> {
                     Ok(r)
                 }
             },
+            Expression::Ternary { condition, then_expr, else_expr } => {
+                let cond_val = self.lower_expr(condition)?;
+                
+                let then_block = self.builder.fresh_block("ternary.then");
+                let else_block = self.builder.fresh_block("ternary.else");
+                let merge_block = self.builder.fresh_block("ternary.merge");
+                
+                self.builder.terminate(IrTerminator::Branch(cond_val, then_block, else_block));
+                
+                let result_slot = self.builder.alloca(IrType::I64);
+                
+                // Then block
+                self.builder.switch_to(then_block);
+                let then_val = self.lower_expr(then_expr)?;
+                self.builder.store(then_val, result_slot);
+                self.builder.terminate(IrTerminator::Jump(merge_block));
+                
+                // Else block
+                self.builder.switch_to(else_block);
+                let else_val = self.lower_expr(else_expr)?;
+                self.builder.store(else_val, result_slot);
+                self.builder.terminate(IrTerminator::Jump(merge_block));
+                
+                // Merge
+                self.builder.switch_to(merge_block);
+                let res = self.builder.load(result_slot, IrType::I64);
+                Ok(res)
+            }
             Expression::Identifier(name) => {
                 if name == "Global" {
                     let global_ptr_var = self.builder.fresh_val();
@@ -994,6 +1022,7 @@ impl<'a> FuncContext<'a> {
                 let lhs = self.lower_expr(left)?;
                 let rhs = self.lower_expr(right)?;
                 match op.as_str() {
+                    "**" => Ok(self.builder.call("vajra_pow", vec![lhs, rhs])),
                     "+" => Ok(self.builder.add(lhs, rhs)),
                     "-" => Ok(self.builder.sub(lhs, rhs)),
                     "*" => Ok(self.builder.mul(lhs, rhs)),

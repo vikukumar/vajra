@@ -328,6 +328,7 @@ impl<'a> Parser<'a> {
     fn get_precedence(kind: &TokenKind) -> i32 {
         match kind {
             TokenKind::Dot | TokenKind::LParen | TokenKind::LBracket => 90,
+            TokenKind::Pow => 50,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => 40,
             TokenKind::Plus | TokenKind::Minus => 35,
             TokenKind::LessThan | TokenKind::GreaterThan | TokenKind::LessEqual | TokenKind::GreaterEqual => 30,
@@ -337,6 +338,7 @@ impl<'a> Parser<'a> {
             TokenKind::Pipe => 16,
             TokenKind::AndAnd => 10,
             TokenKind::OrOr => 5,
+            TokenKind::Question => 3,
             TokenKind::Assign
             | TokenKind::PlusAssign
             | TokenKind::MinusAssign
@@ -358,6 +360,26 @@ impl<'a> Parser<'a> {
             }
 
             match &self.cur_token.kind {
+                TokenKind::Pow => {
+                    self.next_token();
+                    let right = self.parse_expression(next_prec - 1); // Right-associative!
+                    left = Expression::BinaryOp { left: Box::new(left), op: "**".to_string(), right: Box::new(right) };
+                }
+                TokenKind::Question => {
+                    self.next_token();
+                    let then_expr = self.parse_expression(0);
+                    if self.cur_token.kind != TokenKind::Colon {
+                        panic!("Syntax Error: Mismatched ':' for ternary operator '?' on line {}", self.cur_token.line);
+                    }
+                    self.next_token(); // skip ':'
+                    let else_expr = self.parse_expression(next_prec - 1);
+                    left = Expression::Ternary {
+                        condition: Box::new(left),
+                        then_expr: Box::new(then_expr),
+                        else_expr: Box::new(else_expr),
+                    };
+                }
+
                 TokenKind::LParen => {
                     self.next_token();
                     let mut args = Vec::new();
@@ -370,7 +392,11 @@ impl<'a> Parser<'a> {
                     left = match left {
                         Expression::Identifier(name) => {
                             if is_print_name(&name) {
-                                Expression::Intrinsic(Intrinsic::Print(args))
+                                if name.ends_with("ln") || name == "लिखो" || name == "छापा" || name == "मुद्रित" {
+                                    Expression::Intrinsic(Intrinsic::PrintLn(args))
+                                } else {
+                                    Expression::Intrinsic(Intrinsic::Print(args))
+                                }
                             } else {
                                 Expression::FunctionCall { name, args }
                             }
@@ -389,7 +415,11 @@ impl<'a> Parser<'a> {
                                 _ => false,
                             };
                             if is_print_call || is_print_name(&property) {
-                                Expression::Intrinsic(Intrinsic::Print(args))
+                                if property.ends_with("ln") || property == "लिखो" || property == "छापा" || property == "मुद्रित" || property == "log" {
+                                    Expression::Intrinsic(Intrinsic::PrintLn(args))
+                                } else {
+                                    Expression::Intrinsic(Intrinsic::Print(args))
+                                }
                             } else {
                                 Expression::MethodCall { receiver: object, method: property, args }
                             }
@@ -549,7 +579,11 @@ impl<'a> Parser<'a> {
             TokenKind::String(s) => {
                 let v = s.clone();
                 self.next_token();
-                Expression::Literal(Literal::String(v))
+                if v.contains('{') {
+                    self.parse_interpolated_string(&v)
+                } else {
+                    Expression::Literal(Literal::String(v))
+                }
             }
             TokenKind::True => { self.next_token(); Expression::Literal(Literal::Bool(true)) }
             TokenKind::False => { self.next_token(); Expression::Literal(Literal::Bool(false)) }
@@ -586,8 +620,19 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Identifier(id) => {
                 let name = id.clone();
-                self.next_token();
-                Expression::Identifier(name)
+                if name == "f" && matches!(self.peek_token.kind, TokenKind::String(_)) {
+                    self.next_token(); // skip "f"
+                    if let TokenKind::String(s) = &self.cur_token.kind {
+                        let s_val = s.clone();
+                        self.next_token(); // skip string
+                        self.parse_interpolated_string(&s_val)
+                    } else {
+                        unreachable!()
+                    }
+                } else {
+                    self.next_token();
+                    Expression::Identifier(name)
+                }
             }
             // SpawnKeyword used as expression
             TokenKind::SpawnKeyword => {
@@ -705,6 +750,95 @@ impl<'a> Parser<'a> {
         }
         if self.cur_token.kind == TokenKind::RBrace { self.next_token(); }
         body
+    }
+
+    fn parse_interpolated_string(&mut self, s: &str) -> Expression {
+        let mut left: Option<Expression> = None;
+        let mut i = 0;
+        let bytes = s.as_bytes();
+        let len = bytes.len();
+        
+        while i < len {
+            let mut next_start = None;
+            let mut is_js_style = false;
+            let mut j = i;
+            while j < len {
+                if j + 2 <= len && &bytes[j..j+2] == b"${" {
+                    next_start = Some(j);
+                    is_js_style = true;
+                    break;
+                } else if bytes[j] == b'{' {
+                    next_start = Some(j);
+                    is_js_style = false;
+                    break;
+                }
+                j += 1;
+            }
+            
+            if let Some(start) = next_start {
+                if start > i {
+                    let literal_str = String::from_utf8_lossy(&bytes[i..start]).into_owned();
+                    let literal_expr = Expression::Literal(Literal::String(literal_str));
+                    left = Some(match left {
+                        Some(prev) => Expression::BinaryOp {
+                            left: Box::new(prev),
+                            op: "+".to_string(),
+                            right: Box::new(literal_expr),
+                        },
+                        None => literal_expr,
+                    });
+                }
+                
+                let mut brace_count = 1;
+                let expr_start = if is_js_style { start + 2 } else { start + 1 };
+                let mut expr_end = expr_start;
+                while expr_end < len {
+                    if bytes[expr_end] == b'{' {
+                        brace_count += 1;
+                    } else if bytes[expr_end] == b'}' {
+                        brace_count -= 1;
+                        if brace_count == 0 {
+                            break;
+                        }
+                    }
+                    expr_end += 1;
+                }
+                
+                if expr_end < len {
+                    let expr_str = String::from_utf8_lossy(&bytes[expr_start..expr_end]).into_owned();
+                    let sub_lexer = Lexer::new(&expr_str);
+                    let mut sub_parser = Parser::new(sub_lexer);
+                    let sub_expr = sub_parser.parse_expression(0);
+                    
+                    left = Some(match left {
+                        Some(prev) => Expression::BinaryOp {
+                            left: Box::new(prev),
+                            op: "+".to_string(),
+                            right: Box::new(sub_expr),
+                        },
+                        None => sub_expr,
+                    });
+                    
+                    i = expr_end + 1;
+                } else {
+                    panic!("Syntax Error: Mismatched '}}' in string interpolation");
+                }
+            } else {
+                let literal_str = String::from_utf8_lossy(&bytes[i..]).into_owned();
+                let literal_expr = Expression::Literal(Literal::String(literal_str));
+                left = Some(match left {
+                    Some(prev) => Expression::BinaryOp {
+                        left: Box::new(prev),
+                        op: "+".to_string(),
+                        right: Box::new(literal_expr),
+                    },
+                    None => literal_expr,
+                });
+                break;
+            }
+        }
+        
+        left.unwrap_or(Expression::Literal(Literal::String(String::new())))
     }
 }
 

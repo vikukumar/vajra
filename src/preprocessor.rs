@@ -2,10 +2,61 @@
 /// Translates Python-like indentation syntax into standard brace-based syntax.
 
 pub fn preprocess_source(source: &str) -> String {
-    // If the file contains curly braces, assume it is already brace-based and return as is.
-    if source.contains('{') || source.contains('}') {
+    // Determine if the file is already brace-based by looking for curly braces outside of string literals and comments.
+    let mut has_braces_outside = false;
+    let mut in_double_quote = false;
+    let mut in_single_quote = false;
+    let mut in_backtick = false;
+    let mut escaped = false;
+    let mut in_comment = false;
+
+    let chars: Vec<char> = source.chars().collect();
+    let mut idx = 0;
+    while idx < chars.len() {
+        let c = chars[idx];
+        if in_comment {
+            if c == '\n' || c == '\r' {
+                in_comment = false;
+            }
+            idx += 1;
+            continue;
+        }
+        if escaped {
+            escaped = false;
+            idx += 1;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            idx += 1;
+            continue;
+        }
+        match c {
+            '#' if !in_double_quote && !in_single_quote && !in_backtick => {
+                in_comment = true;
+            }
+            '"' if !in_single_quote && !in_backtick => {
+                in_double_quote = !in_double_quote;
+            }
+            '\'' if !in_double_quote && !in_backtick => {
+                in_single_quote = !in_single_quote;
+            }
+            '`' if !in_double_quote && !in_single_quote => {
+                in_backtick = !in_backtick;
+            }
+            '{' | '}' if !in_double_quote && !in_single_quote && !in_backtick => {
+                has_braces_outside = true;
+                break;
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+
+    if has_braces_outside {
         return source.to_string();
     }
+
 
     let mut result = String::new();
     let mut indent_stack = vec![0];
