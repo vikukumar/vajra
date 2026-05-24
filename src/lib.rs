@@ -60,7 +60,7 @@ pub fn compile_source(
     let ir_module = codegen::ast_to_ir::lower(&program, module_name)?;
 
     // 3. IR → Object file bytes
-    let obj_bytes = codegen::compile_to_object(&ir_module, &backend)?;
+    let obj_bytes = codegen::compile_to_object(&ir_module, &backend, &platform)?;
 
     // 4. Get embedded runtime object
     let runtime_bytes = runtime::get_runtime_object_bytes(&platform);

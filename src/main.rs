@@ -285,9 +285,9 @@ fn cmd_compile(
     let (backend, platform) = resolve_target(target);
     eprintln!("   ✓ Target: {:?} on {:?}", backend, platform);
 
-    // 4. Code generation → object file
-    let obj_bytes = codegen::compile_to_object(&ir_module, &backend)
-        .with_context(|| "Code generation failed")?;
+     // 4. Code generation → object file
+     let obj_bytes = codegen::compile_to_object(&ir_module, &backend, &platform)
+         .with_context(|| "Code generation failed")?;
     eprintln!("   ✓ Object generated ({} bytes)", obj_bytes.len());
 
     if emit_obj {

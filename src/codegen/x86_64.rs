@@ -8,6 +8,7 @@ use object::write::{Object, StandardSection, Symbol, SymbolSection, Relocation};
 use object::{Architecture, BinaryFormat, Endianness, SymbolKind, SymbolScope, RelocationEncoding, RelocationFlags};
 use anyhow::Result;
 use crate::ir::*;
+use crate::linker::TargetPlatform;
 
 // ─── Register Definitions ────────────────────────────────────────────────────
 
@@ -352,9 +353,9 @@ fn analyze_and_assign_regs(func: &IrFunction) -> std::collections::HashMap<ValId
 
 // ─── Codegen ─────────────────────────────────────────────────────────────────
 
-pub fn compile(module: &IrModule) -> Result<Vec<u8>> {
+pub fn compile(module: &IrModule, platform: &TargetPlatform) -> Result<Vec<u8>> {
     let mut gen = X86_64Codegen::new(module);
-    gen.compile_module()
+    gen.compile_module(platform)
 }
 
 struct X86_64Codegen<'m> {
@@ -394,11 +395,11 @@ impl<'m> X86_64Codegen<'m> {
         Ok(())
     }
 
-    pub fn compile_module(&mut self) -> Result<Vec<u8>> {
-        let (binary_format, arch) = if cfg!(target_os = "windows") {
-            (BinaryFormat::Coff, Architecture::X86_64)
-        } else {
-            (BinaryFormat::Elf, Architecture::X86_64)
+    pub fn compile_module(&mut self, platform: &TargetPlatform) -> Result<Vec<u8>> {
+        let (binary_format, arch) = match platform {
+            TargetPlatform::WindowsX64 => (BinaryFormat::Coff, Architecture::X86_64),
+            TargetPlatform::LinuxX64 => (BinaryFormat::Elf, Architecture::X86_64),
+            TargetPlatform::MacOsX64 => (BinaryFormat::Elf, Architecture::X86_64), // Using ELF for macOS fallback
         };
 
         let mut obj = Object::new(binary_format, arch, Endianness::Little);

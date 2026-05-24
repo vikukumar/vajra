@@ -5,6 +5,7 @@ pub mod x86_64;
 pub mod ast_to_ir;
 
 use crate::ir::IrModule;
+use crate::linker::TargetPlatform;
 use anyhow::Result;
 
 /// Available code generation backends
@@ -38,9 +39,9 @@ impl Backend {
 }
 
 /// Compile an IR module to object file bytes
-pub fn compile_to_object(module: &IrModule, backend: &Backend) -> Result<Vec<u8>> {
+pub fn compile_to_object(module: &IrModule, backend: &Backend, platform: &TargetPlatform) -> Result<Vec<u8>> {
     match backend {
-        Backend::X86_64 => x86_64::compile(module),
+        Backend::X86_64 => x86_64::compile(module, platform),
         Backend::AArch64 => {
             anyhow::bail!("AArch64 backend not yet implemented in v0.1 — planned for v0.1")
         }
