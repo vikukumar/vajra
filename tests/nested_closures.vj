@@ -1,0 +1,16 @@
+# tests/nested_closures.vj
+
+@main
+fn test():
+    let o = 0
+    let a = 3
+    let b = 5
+    
+    fn chadi():
+        return a * b
+
+    while(a):
+        a = a - 1
+        o = o + 1
+        likho(chadi(), "\n")
+        likho(o, "\n")

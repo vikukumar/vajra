@@ -1,7 +1,7 @@
-/// Vajra IR — Target-independent Intermediate Representation
-/// SSA-like 3-address code used between AST and machine code generation.
-/// Each IrValue is an immutable virtual register; mutable state is managed
-/// through explicit Load/Store into named stack slots.
+//! Vajra IR — Target-independent Intermediate Representation
+//! SSA-like 3-address code used between AST and machine code generation.
+//! Each IrValue is an immutable virtual register; mutable state is managed
+//! through explicit Load/Store into named stack slots.
 
 use std::collections::HashMap;
 

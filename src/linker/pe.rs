@@ -357,7 +357,7 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
                                     found_va
                                 } else {
                                     if !name.is_empty() {
-                                        println!("Warning: Unresolved symbol: {}", name);
+                                        anyhow::bail!("Linker Error: Unresolved symbol '{}'", name);
                                     }
                                     0
                                 }

@@ -57,14 +57,12 @@ pub fn preprocess_source(source: &str) -> String {
         return source.to_string();
     }
 
-
     let mut result = String::new();
     let mut indent_stack = vec![0];
     let mut lines: Vec<String> = source.lines().map(|s| s.to_string()).collect();
 
     // First pass: replace colons at the end of block-starting lines with open braces '{'
-    for i in 0..lines.len() {
-        let line = &lines[i];
+    for line in &mut lines {
         let trimmed = line.trim();
 
         // Skip comments and empty lines
@@ -83,16 +81,15 @@ pub fn preprocess_source(source: &str) -> String {
         if code_trimmed.ends_with(':') {
             // Check if the colon is at the end. Replace it with '{'
             let raw_trimmed = line.trim_end();
-            if raw_trimmed.ends_with(':') {
-                let prefix = &raw_trimmed[..raw_trimmed.len() - 1];
-                lines[i] = format!("{}{{", prefix);
+            if let Some(prefix) = raw_trimmed.strip_suffix(':') {
+                *line = format!("{}{{", prefix);
             }
         }
     }
 
-    // Second pass: insert closing braces '}' when indentation level decreases
-    for i in 0..lines.len() {
-        let line = &lines[i];
+    // Second pass: insert closing braces '}' when indentation level decreases,
+    // and pop from the stack if a line explicitly starts with a closing brace.
+    for line in &lines {
         let trimmed = line.trim();
 
         // Skip empty lines or lines that are comments
@@ -114,8 +111,11 @@ pub fn preprocess_source(source: &str) -> String {
             }
         }
 
-        // If the line starts with a closing brace, don't count it for dedent insertion
+        // If the line starts with a closing brace, pop it from stack and don't count for dedent insertion
         if trimmed.starts_with('}') {
+            if indent_stack.len() > 1 {
+                indent_stack.pop();
+            }
             result.push_str(line);
             result.push('\n');
             continue;
@@ -131,7 +131,7 @@ pub fn preprocess_source(source: &str) -> String {
             while current_indent < top {
                 indent_stack.pop();
                 top = *indent_stack.last().unwrap_or(&0);
-                
+
                 // Add a closing brace before the current line (preserving indentation)
                 let indent_str = " ".repeat(top);
                 result.push_str(&format!("{}}}\n", indent_str));

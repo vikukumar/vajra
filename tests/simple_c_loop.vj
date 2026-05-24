@@ -1,0 +1,9 @@
+# tests/simple_c_loop.vj
+
+@main
+fn main():
+    let sum = 0
+    for (let i = 0; i < 5; i++) {
+        sum = sum + 1
+    }
+    println(sum)

@@ -1,5 +1,5 @@
-/// Vajra Code Generation — Module dispatcher
-/// Routes AST compilation to the appropriate backend (x86_64, aarch64, wasm)
+//! Vajra Code Generation — Module dispatcher
+//! Routes AST compilation to the appropriate backend (x86_64, aarch64, wasm)
 
 pub mod x86_64;
 pub mod ast_to_ir;

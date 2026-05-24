@@ -1,0 +1,42 @@
+# tests/c_loops_postfix.vj
+
+@main
+fn main():
+    # 1. Postfix increment and decrement on local variable
+    let i = 0
+    i++
+    println(i) # Expected: 1
+    
+    i--
+    println(i) # Expected: 0
+    
+    # 2. Prefix increment and decrement on local variable
+    ++i
+    println(i) # Expected: 1
+    
+    --i
+    println(i) # Expected: 0
+    
+    # 3. Standard C-style loop (semicolons)
+    let sum = 0
+    for (let j = 0; j < 5; j++) {
+        sum = sum + j
+    }
+    println(sum) # Expected: 10
+    
+    # 4. Comma-separated C-style loop
+    let sum2 = 0
+    for (let k = 0, k < 5, ++k) {
+        sum2 = sum2 + k
+    }
+    println(sum2) # Expected: 10
+
+    # 5. Loop with continue statement
+    let sum3 = 0
+    for (let x = 0; x < 5; x++) {
+        if (x == 2) {
+            continue
+        }
+        sum3 = sum3 + x
+    }
+    println(sum3) # Expected: 8 (0 + 1 + 3 + 4)

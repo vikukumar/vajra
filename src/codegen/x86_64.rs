@@ -1,7 +1,7 @@
-/// Vajra x86-64 Code Generator + Instruction Encoder
-/// Compiles Vajra IR → x86-64 machine code stored in COFF/ELF object format.
-/// Uses the `object` crate (pure Rust) to write the object file.
-/// NO LLVM, NO MSVC, NO GCC — 100% self-contained.
+//! Vajra x86-64 Code Generator + Instruction Encoder
+//! Compiles Vajra IR → x86-64 machine code stored in COFF/ELF object format.
+//! Uses the `object` crate (pure Rust) to write the object file.
+//! NO LLVM, NO MSVC, NO GCC — 100% self-contained.
 
 use std::collections::HashMap;
 use object::write::{Object, StandardSection, Symbol, SymbolSection, Relocation};

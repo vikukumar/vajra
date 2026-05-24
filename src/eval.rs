@@ -251,8 +251,16 @@ impl Interpreter {
             Statement::Break => Ok(Value::Break),
             Statement::Continue => Ok(Value::Continue),
 
-            Statement::Function { .. } | Statement::Method { .. } | Statement::Class { .. } => {
+            Statement::Method { .. } | Statement::Class { .. } => {
                 // Already hoisted
+                Ok(Value::Void)
+            }
+
+            Statement::Function { name, params, body, .. } => {
+                self.functions.insert(name.clone(), FuncDef {
+                    params: params.iter().map(|p| p.name.clone()).collect(),
+                    body: body.clone(),
+                });
                 Ok(Value::Void)
             }
 

@@ -1,20 +1,39 @@
-/// Vajra Compiler Driver (vajrac)
-/// Version 0.1.0 — 100% Self-Hosted, No External Compiler Required
-/// Supports: compile, run, build, test — all without LLVM, GCC, MSVC, Clang
+//! Vajra Compiler Driver (vajrac)
+//! Version 0.1.0 — 100% Self-Hosted, No External Compiler Required
+//! Supports: compile, run, build, test — all without LLVM, GCC, MSVC, Clang
 
+#![allow(
+    clippy::needless_borrows_for_generic_args,
+    clippy::new_without_default,
+    clippy::collapsible_match,
+    clippy::single_match,
+    clippy::get_first,
+    clippy::missing_const_for_thread_local,
+    clippy::collapsible_if,
+    clippy::match_like_matches_macro,
+    clippy::manual_range_contains,
+    clippy::unnecessary_sort_by,
+    clippy::len_zero,
+    clippy::needless_range_loop,
+    clippy::if_same_then_else,
+    clippy::manual_strip,
+    clippy::implicit_saturating_sub,
+    clippy::for_kv_map
+)]
+
+use anyhow::{Context, Result};
+use clap::{Parser as ClapParser, Subcommand};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::collections::HashSet;
 use std::thread;
-use anyhow::{Context, Result};
-use clap::{Parser as ClapParser, Subcommand};
 
 use vajra_core::{
     ast::{Program, Statement},
-    ir::IrModule,
     codegen::{self, ast_to_ir, Backend},
     eval,
+    ir::IrModule,
     lexer::Lexer,
     linker::{self, TargetPlatform},
     parser::Parser,
@@ -180,40 +199,31 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Compile { file, output, target, opt, emit_ir, emit_obj }) => {
-            cmd_compile(&file, &output, &target, opt, emit_ir, emit_obj)
-        }
-        Some(Command::Build { file, output, release }) => {
-            cmd_build(&file, &output, release)
-        }
-        Some(Command::Run { file, args }) => {
-            cmd_run(&file, &args)
-        }
-        Some(Command::Exec { file, args }) => {
-            cmd_exec(&file, &args)
-        }
-        Some(Command::Repl) => {
-            cmd_repl()
-        }
-        Some(Command::Check { file }) => {
-            cmd_check(&file)
-        }
-        Some(Command::Lint { file }) => {
-            cmd_lint(&file)
-        }
-        Some(Command::Ast { file }) => {
-            cmd_ast(&file)
-        }
-        Some(Command::Ir { file }) => {
-            cmd_ir(&file)
-        }
+        Some(Command::Compile {
+            file,
+            output,
+            target,
+            opt,
+            emit_ir,
+            emit_obj,
+        }) => cmd_compile(&file, &output, &target, opt, emit_ir, emit_obj),
+        Some(Command::Build {
+            file,
+            output,
+            release,
+        }) => cmd_build(&file, &output, release),
+        Some(Command::Run { file, args }) => cmd_run(&file, &args),
+        Some(Command::Exec { file, args }) => cmd_exec(&file, &args),
+        Some(Command::Repl) => cmd_repl(),
+        Some(Command::Check { file }) => cmd_check(&file),
+        Some(Command::Lint { file }) => cmd_lint(&file),
+        Some(Command::Ast { file }) => cmd_ast(&file),
+        Some(Command::Ir { file }) => cmd_ir(&file),
         Some(Command::Info) => {
             cmd_info();
             Ok(())
         }
-        None => {
-            cmd_repl()
-        }
+        None => cmd_repl(),
     }
 }
 
@@ -231,14 +241,18 @@ fn cmd_compile(
 
     // 1. Concurrent Compile and Merge
     let compiled_files = Arc::new(Mutex::new(HashSet::new()));
-    let canonical_entry = Path::new(file).canonicalize()
+    let canonical_entry = Path::new(file)
+        .canonicalize()
         .with_context(|| format!("Failed to canonicalize entry path: '{}'", file))?
         .to_string_lossy()
         .to_string();
     compiled_files.lock().unwrap().insert(canonical_entry);
 
     let ir_module = compile_module_transitively(file, compiled_files)?;
-    eprintln!("   ✓ IR generated ({} functions)", ir_module.functions.len());
+    eprintln!(
+        "   ✓ IR generated ({} functions)",
+        ir_module.functions.len()
+    );
 
     if emit_ir {
         print_ir(&ir_module);
@@ -256,8 +270,7 @@ fn cmd_compile(
 
     if emit_obj {
         let obj_path = output_path(file, output, "o", &platform);
-        fs::write(&obj_path, &obj_bytes)
-            .with_context(|| format!("Cannot write '{}'", obj_path))?;
+        fs::write(&obj_path, &obj_bytes).with_context(|| format!("Cannot write '{}'", obj_path))?;
         eprintln!("   ✓ Object written to '{}'", obj_path);
         return Ok(());
     }
@@ -270,8 +283,7 @@ fn cmd_compile(
 
     // 6. Write executable
     let exe_path = output_path(file, output, platform.exe_extension(), &platform);
-    fs::write(&exe_path, &exe_bytes)
-        .with_context(|| format!("Cannot write '{}'", exe_path))?;
+    fs::write(&exe_path, &exe_bytes).with_context(|| format!("Cannot write '{}'", exe_path))?;
 
     // Make executable on Unix
     #[cfg(unix)]
@@ -296,7 +308,11 @@ fn cmd_build(file: &str, output: &str, release: bool) -> Result<()> {
 fn cmd_run(file: &str, extra_args: &[String]) -> Result<()> {
     // 1. Compile to temp directory
     let tmp_dir = std::env::temp_dir();
-    let module_name = Path::new(file).file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let module_name = Path::new(file)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let platform = TargetPlatform::host();
     let ext = platform.exe_extension();
     let exe_name = if ext.is_empty() {
@@ -321,8 +337,7 @@ fn cmd_run(file: &str, extra_args: &[String]) -> Result<()> {
 }
 
 fn cmd_lint(file: &str) -> Result<()> {
-    let source = fs::read_to_string(file)
-        .with_context(|| format!("Cannot read '{}'", file))?;
+    let source = fs::read_to_string(file).with_context(|| format!("Cannot read '{}'", file))?;
     let program = parse(&source)?;
     let mut linter = vajra_core::lint::Linter::new();
     linter.lint_program(&program);
@@ -330,7 +345,11 @@ fn cmd_lint(file: &str) -> Result<()> {
         println!("✨ No lint warnings found in '{}'.", file);
         Ok(())
     } else {
-        println!("⚠️ Found {} lint warnings in '{}':", linter.warnings.len(), file);
+        println!(
+            "⚠️ Found {} lint warnings in '{}':",
+            linter.warnings.len(),
+            file
+        );
         for warning in &linter.warnings {
             println!("  {}", warning);
         }
@@ -340,8 +359,7 @@ fn cmd_lint(file: &str) -> Result<()> {
 
 fn cmd_exec(file: &str, _extra_args: &[String]) -> Result<()> {
     // Use the interpreter (eval.rs) — no compilation
-    let source = fs::read_to_string(file)
-        .with_context(|| format!("Cannot read '{}'", file))?;
+    let source = fs::read_to_string(file).with_context(|| format!("Cannot read '{}'", file))?;
 
     let program = parse(&source)?;
     eprintln!("🔰 Vajra v0.1.0 — Executing '{}' (interpreter mode)", file);
@@ -385,8 +403,18 @@ fn cmd_repl() -> Result<()> {
         let trimmed = line.trim();
 
         match trimmed {
-            "exit" | "quit" | "निर्गम" | "بيرون" | "退出" => {
-                println!("\n🙏 नमस्ते | Goodbye | Salam | 再见");
+            "exit"
+            | "quit"
+            | "निर्गम"
+            | "بيرون"
+            | "退出"
+            | "निकलने"
+            | "बहिर्गमन"
+            | "इग्ज़िट"
+            | "نکلने"
+            | "nikalo"
+            | "nikal jao" => {
+                println!("\n🙏 नमस्ते | Vande Mataram | Jai Hind | Bharat Mata ki Jai");
                 break;
             }
             _ if trimmed.starts_with(":ir ") => {
@@ -439,11 +467,16 @@ fn cmd_repl() -> Result<()> {
             let code = buffer.trim().to_string();
             buffer.clear();
 
-            if code.is_empty() { continue; }
+            if code.is_empty() {
+                continue;
+            }
 
             let program = match parse(&code) {
                 Ok(p) => p,
-                Err(e) => { eprintln!("Parse error: {}", e); continue; }
+                Err(e) => {
+                    eprintln!("Parse error: {}", e);
+                    continue;
+                }
             };
             if let Err(e) = interpreter.run(&program) {
                 eprintln!("❌ Runtime error: {}", e);
@@ -455,14 +488,15 @@ fn cmd_repl() -> Result<()> {
 
 fn cmd_check(file: &str) -> Result<()> {
     let compiled_files = Arc::new(Mutex::new(HashSet::new()));
-    let canonical_entry = Path::new(file).canonicalize()
+    let canonical_entry = Path::new(file)
+        .canonicalize()
         .with_context(|| format!("Failed to canonicalize entry path: '{}'", file))?
         .to_string_lossy()
         .to_string();
     compiled_files.lock().unwrap().insert(canonical_entry);
 
-    let _ir_module = compile_module_transitively(file, compiled_files)
-        .with_context(|| "IR lowering error")?;
+    let _ir_module =
+        compile_module_transitively(file, compiled_files).with_context(|| "IR lowering error")?;
 
     eprintln!("✅ '{}' is valid Vajra code", file);
     Ok(())
@@ -477,7 +511,8 @@ fn cmd_ast(file: &str) -> Result<()> {
 
 fn cmd_ir(file: &str) -> Result<()> {
     let compiled_files = Arc::new(Mutex::new(HashSet::new()));
-    let canonical_entry = Path::new(file).canonicalize()
+    let canonical_entry = Path::new(file)
+        .canonicalize()
         .with_context(|| format!("Failed to canonicalize entry path: '{}'", file))?
         .to_string_lossy()
         .to_string();
@@ -543,7 +578,8 @@ fn resolve_import_path(current_file: &str, import_name: &str) -> Result<String> 
             }
         }
     }
-    let canonical = target_path.canonicalize()
+    let canonical = target_path
+        .canonicalize()
         .with_context(|| format!("Failed to canonicalize import path: {:?}", target_path))?;
     Ok(canonical.to_string_lossy().to_string())
 }
@@ -552,9 +588,13 @@ fn compile_module_transitively(
     file_path: &str,
     compiled_files: Arc<Mutex<HashSet<String>>>,
 ) -> Result<IrModule> {
-    let source = fs::read_to_string(file_path)
-        .with_context(|| format!("Cannot read '{}'", file_path))?;
-    let module_name = Path::new(file_path).file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let source =
+        fs::read_to_string(file_path).with_context(|| format!("Cannot read '{}'", file_path))?;
+    let module_name = Path::new(file_path)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let program = parse(&source)?;
     let imports = get_imports(&program);
 
@@ -570,15 +610,15 @@ fn compile_module_transitively(
             drop(set);
 
             let compiled_files_clone = Arc::clone(&compiled_files);
-            let handle = thread::spawn(move || {
-                compile_module_transitively(&resolved, compiled_files_clone)
-            });
+            let handle =
+                thread::spawn(move || compile_module_transitively(&resolved, compiled_files_clone));
             handles.push(handle);
         }
     }
 
     for handle in handles {
-        let imported_ir = handle.join()
+        let imported_ir = handle
+            .join()
             .map_err(|e| anyhow::anyhow!("Compilation thread panicked: {:?}", e))??;
         main_ir.merge(imported_ir);
     }
@@ -597,7 +637,10 @@ fn resolve_target(triple: &str) -> (Backend, TargetPlatform) {
     if triple.is_empty() {
         (Backend::host(), TargetPlatform::host())
     } else {
-        (Backend::from_triple(triple), TargetPlatform::from_triple(triple))
+        (
+            Backend::from_triple(triple),
+            TargetPlatform::from_triple(triple),
+        )
     }
 }
 
@@ -605,7 +648,10 @@ fn output_path(source_file: &str, output: &str, ext: &str, _platform: &TargetPla
     if !output.is_empty() {
         return output.to_string();
     }
-    let stem = Path::new(source_file).file_stem().unwrap_or_default().to_string_lossy();
+    let stem = Path::new(source_file)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
     if ext.is_empty() {
         stem.to_string()
     } else {
@@ -623,13 +669,28 @@ fn print_ir(module: &vajra_core::ir::IrModule) {
     println!("\nFunctions:");
     for func in &module.functions {
         if func.is_extern {
-            println!("  extern fn {}({})", func.name, func.params.iter().map(|p| format!("%{}", p.val)).collect::<Vec<_>>().join(", "));
+            println!(
+                "  extern fn {}({})",
+                func.name,
+                func.params
+                    .iter()
+                    .map(|p| format!("%{}", p.val))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             continue;
         }
         let main_mark = if func.is_main { " [main]" } else { "" };
-        println!("\n  fn {}({}){}:", func.name,
-            func.params.iter().map(|p| format!("{}: {:?}", p.name, p.ty)).collect::<Vec<_>>().join(", "),
-            main_mark);
+        println!(
+            "\n  fn {}({}){}:",
+            func.name,
+            func.params
+                .iter()
+                .map(|p| format!("{}: {:?}", p.name, p.ty))
+                .collect::<Vec<_>>()
+                .join(", "),
+            main_mark
+        );
         for block in &func.blocks {
             println!("    .{}:", block.label);
             for instr in &block.instrs {

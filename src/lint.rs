@@ -56,16 +56,12 @@ impl Linter {
                 // Check for infinite loop without breaks or returns
                 if is_always_true(condition) {
                     if !has_control_flow_exit(body) {
-                        self.warnings.push(format!(
-                            "Warning: Infinite loop detected without any 'break' or 'return' exit points."
-                        ));
+                        self.warnings.push("Warning: Infinite loop detected without any 'break' or 'return' exit points.".to_string());
                     }
                 }
                 // Check for always false condition
                 if is_always_false(condition) {
-                    self.warnings.push(format!(
-                        "Warning: Loop condition is always false; the loop body is unreachable code."
-                    ));
+                    self.warnings.push("Warning: Loop condition is always false; the loop body is unreachable code.".to_string());
                 }
                 for s in body {
                     self.lint_statement(s);
@@ -81,14 +77,10 @@ impl Linter {
             Statement::If { condition, then_body, else_body } => {
                 self.lint_expression(condition);
                 if is_always_true(condition) {
-                    self.warnings.push(format!(
-                        "Warning: 'if' condition is always true; 'else' branch (if any) is unreachable code."
-                    ));
+                    self.warnings.push("Warning: 'if' condition is always true; 'else' branch (if any) is unreachable code.".to_string());
                 }
                 if is_always_false(condition) {
-                    self.warnings.push(format!(
-                        "Warning: 'if' condition is always false; 'then' branch is unreachable code."
-                    ));
+                    self.warnings.push("Warning: 'if' condition is always false; 'then' branch is unreachable code.".to_string());
                 }
                 for s in then_body {
                     self.lint_statement(s);
@@ -185,13 +177,11 @@ impl Linter {
                         "Style Warning: {} name '{}' should start with an uppercase letter.",
                         kind, name
                     ));
-                } else if !should_be_uppercase && c.is_ascii_uppercase() {
-                    if name != "System" {
-                        self.warnings.push(format!(
-                            "Style Warning: {} name '{}' should start with a lowercase letter.",
-                            kind, name
-                        ));
-                    }
+                } else if !should_be_uppercase && c.is_ascii_uppercase() && name != "System" {
+                    self.warnings.push(format!(
+                        "Style Warning: {} name '{}' should start with a lowercase letter.",
+                        kind, name
+                    ));
                 }
             }
         }
@@ -208,13 +198,11 @@ impl Linter {
         collect_referenced_vars(body, &mut referenced_vars);
 
         for var in declared_vars {
-            if !referenced_vars.contains(&var) {
-                if !var.starts_with('_') {
-                    self.warnings.push(format!(
-                        "Warning: Variable or parameter '{}' in function '{}' is declared but never used.",
-                        var, func_name
-                    ));
-                }
+            if !referenced_vars.contains(&var) && !var.starts_with('_') {
+                self.warnings.push(format!(
+                    "Warning: Variable or parameter '{}' in function '{}' is declared but never used.",
+                    var, func_name
+                ));
             }
         }
     }
@@ -342,17 +330,11 @@ fn collect_expr_refs(expr: &Expression, refs: &mut HashSet<String>) {
 }
 
 fn is_always_true(expr: &Expression) -> bool {
-    match expr {
-        Expression::Literal(Literal::Bool(true)) => true,
-        _ => false,
-    }
+    matches!(expr, Expression::Literal(Literal::Bool(true)))
 }
 
 fn is_always_false(expr: &Expression) -> bool {
-    match expr {
-        Expression::Literal(Literal::Bool(false)) => true,
-        _ => false,
-    }
+    matches!(expr, Expression::Literal(Literal::Bool(false)))
 }
 
 fn has_control_flow_exit(stmts: &[Statement]) -> bool {
@@ -369,10 +351,8 @@ fn has_control_flow_exit(stmts: &[Statement]) -> bool {
                     }
                 }
             }
-            Statement::While { body, .. } | Statement::For { body, .. } => {
-                if has_control_flow_exit(body) {
-                    return true;
-                }
+            Statement::While { body, .. } | Statement::For { body, .. } if has_control_flow_exit(body) => {
+                return true;
             }
             Statement::Expression(Expression::Intrinsic(Intrinsic::Exit(_))) => return true,
             Statement::Expression(Expression::FunctionCall { name, .. }) if name == "exit" || name == "निर्गम" => return true,

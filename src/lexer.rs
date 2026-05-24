@@ -88,6 +88,8 @@ pub enum TokenKind {
     At,           // @ (for decorators)
     Pow,          // **
     Question,     // ?
+    PlusPlus,     // ++
+    MinusMinus,   // --
 
     // Whitespace/Flow
     Newline,
@@ -538,11 +540,13 @@ impl<'a> Lexer<'a> {
             }
             "+" => {
                 if let Some(&"=") = self.peek() { self.advance(); TokenKind::PlusAssign }
+                else if let Some(&"+") = self.peek() { self.advance(); TokenKind::PlusPlus }
                 else { TokenKind::Plus }
             }
             "-" => {
                 if let Some(&">") = self.peek() { self.advance(); TokenKind::Arrow }
                 else if let Some(&"=") = self.peek() { self.advance(); TokenKind::MinusAssign }
+                else if let Some(&"-") = self.peek() { self.advance(); TokenKind::MinusMinus }
                 else { TokenKind::Minus }
             }
             "*" => {

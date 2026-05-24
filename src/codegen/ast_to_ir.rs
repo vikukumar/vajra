@@ -1,10 +1,10 @@
-/// Vajra AST → IR Lowering
-/// Converts the parsed AST into target-independent Vajra IR
+//! Vajra AST → IR Lowering
+//! Converts the parsed AST into target-independent Vajra IR
 
-use std::collections::HashMap;
 use crate::ast::*;
 use crate::ir::*;
 use anyhow::{bail, Result};
+use std::collections::HashMap;
 
 pub struct AstToIr {
     module: IrModule,
@@ -55,10 +55,49 @@ impl AstToIr {
             name: "Socket".to_string(),
             fields: vec![("_handle".to_string(), VajraType::I64)],
             methods: vec![
-                Statement::Method { access: AccessModifier::Public, name: "connect".to_string(), params: vec![Param { name: "ip".to_string(), ty: VajraType::Str }, Param { name: "port".to_string(), ty: VajraType::I64 }], body: vec![], return_type: VajraType::I64 },
-                Statement::Method { access: AccessModifier::Public, name: "send".to_string(), params: vec![Param { name: "data".to_string(), ty: VajraType::Str }], body: vec![], return_type: VajraType::I64 },
-                Statement::Method { access: AccessModifier::Public, name: "recv".to_string(), params: vec![Param { name: "len".to_string(), ty: VajraType::I64 }], body: vec![], return_type: VajraType::Str },
-                Statement::Method { access: AccessModifier::Public, name: "close".to_string(), params: vec![], body: vec![], return_type: VajraType::I64 },
+                Statement::Method {
+                    access: AccessModifier::Public,
+                    name: "connect".to_string(),
+                    params: vec![
+                        Param {
+                            name: "ip".to_string(),
+                            ty: VajraType::Str,
+                        },
+                        Param {
+                            name: "port".to_string(),
+                            ty: VajraType::I64,
+                        },
+                    ],
+                    body: vec![],
+                    return_type: VajraType::I64,
+                },
+                Statement::Method {
+                    access: AccessModifier::Public,
+                    name: "send".to_string(),
+                    params: vec![Param {
+                        name: "data".to_string(),
+                        ty: VajraType::Str,
+                    }],
+                    body: vec![],
+                    return_type: VajraType::I64,
+                },
+                Statement::Method {
+                    access: AccessModifier::Public,
+                    name: "recv".to_string(),
+                    params: vec![Param {
+                        name: "len".to_string(),
+                        ty: VajraType::I64,
+                    }],
+                    body: vec![],
+                    return_type: VajraType::Str,
+                },
+                Statement::Method {
+                    access: AccessModifier::Public,
+                    name: "close".to_string(),
+                    params: vec![],
+                    body: vec![],
+                    return_type: VajraType::I64,
+                },
             ],
             base: None,
         };
@@ -80,8 +119,15 @@ impl AstToIr {
 
         // First pass: collect all function signatures for forward-call resolution
         for stmt in &program.statements {
-            if let Statement::Function { name, params, is_extern, .. } = stmt {
-                self.func_sigs.insert(name.clone(), (params.len(), *is_extern));
+            if let Statement::Function {
+                name,
+                params,
+                is_extern,
+                ..
+            } = stmt
+            {
+                self.func_sigs
+                    .insert(name.clone(), (params.len(), *is_extern));
             }
         }
 
@@ -112,40 +158,64 @@ impl AstToIr {
         // store as null-terminated bytes
         let mut bytes = s.as_bytes().to_vec();
         bytes.push(0);
-        self.module.globals.push(IrGlobal { name: name.clone(), data: bytes, is_string: true });
+        self.module.globals.push(IrGlobal {
+            name: name.clone(),
+            data: bytes,
+            is_string: true,
+        });
         name
     }
 
     fn lower_top_level(&mut self, stmt: &Statement) -> Result<()> {
         match stmt {
-            Statement::Function { name, params, body, is_main, is_extern, .. } => {
+            Statement::Function {
+                name,
+                params,
+                body,
+                is_main,
+                is_extern,
+                ..
+            } => {
                 self.lower_function(name, params, body, *is_main, *is_extern)?;
             }
             Statement::Class { name, methods, .. } => {
                 let mut bytes = name.as_bytes().to_vec();
                 bytes.push(0);
-                self.module.globals.push(IrGlobal { name: name.clone(), data: bytes, is_string: true });
+                self.module.globals.push(IrGlobal {
+                    name: name.clone(),
+                    data: bytes,
+                    is_string: true,
+                });
                 for m in methods {
                     self.lower_class_method(name, m)?;
                 }
             }
-            Statement::Method { name, params, body, .. } => {
+            Statement::Method {
+                name, params, body, ..
+            } => {
                 self.lower_function(name, params, body, false, false)?;
             }
             Statement::Import(_) => {} // resolved by main driver
-            _ => {} // top-level expressions ignored
+            _ => {}                    // top-level expressions ignored
         }
         Ok(())
     }
 
     fn lower_class_method(&mut self, class_name: &str, method: &Statement) -> Result<()> {
         match method {
-            Statement::Method { name, params, body, .. }
-            | Statement::Function { name, params, body, .. } => {
+            Statement::Method {
+                name, params, body, ..
+            }
+            | Statement::Function {
+                name, params, body, ..
+            } => {
                 let prefixed_name = format!("{}_{}", class_name, name);
-                let mut prepended_params = vec![Param { name: "this".to_string(), ty: VajraType::Ptr(Box::new(VajraType::Void)) }];
+                let mut prepended_params = vec![Param {
+                    name: "this".to_string(),
+                    ty: VajraType::Ptr(Box::new(VajraType::Void)),
+                }];
                 prepended_params.extend(params.clone());
-                
+
                 self.lower_function(&prefixed_name, &prepended_params, body, false, false)?;
             }
             _ => {}
@@ -200,25 +270,28 @@ impl AstToIr {
         // Special: if is_main, call vajra_runtime_init first and allocate Global
         if is_main {
             builder.call("vajra_runtime_init", vec![]);
-            
+
             let size_bytes = (self.field_indices.len() + 1) * 8;
             let size_val = builder.const_i64(size_bytes as i64);
             let obj_ptr = builder.call("vajra_alloc", vec![size_val]);
-            
+
             let class_name_ptr = builder.fresh_val();
             let gname = self.intern_string("GlobalClass");
             builder.emit(IrInstr::StrPtr(class_name_ptr, gname));
             builder.emit(IrInstr::Store(class_name_ptr, obj_ptr));
-            
+
             let tagged_zero = builder.const_i64(1);
             for &index in self.field_indices.values() {
                 let index_val = builder.const_i64((index + 1) as i64);
                 let field_ptr = builder.gep(obj_ptr, index_val);
                 builder.emit(IrInstr::Store(tagged_zero, field_ptr));
             }
-            
+
             let global_ptr_var = builder.fresh_val();
-            builder.emit(IrInstr::StrPtr(global_ptr_var, "vajra_global_instance".to_string()));
+            builder.emit(IrInstr::StrPtr(
+                global_ptr_var,
+                "vajra_global_instance".to_string(),
+            ));
             builder.emit(IrInstr::Store(obj_ptr, global_ptr_var));
         }
 
@@ -243,7 +316,11 @@ impl AstToIr {
         for stmt in body {
             fc.lower_stmt(stmt)?;
         }
-        let FuncContext { mut builder, str_count, .. } = fc;
+        let FuncContext {
+            mut builder,
+            str_count,
+            ..
+        } = fc;
         self.str_count = str_count;
         self.loop_count = loop_count;
 
@@ -338,7 +415,11 @@ impl<'a> FuncContext<'a> {
         self.str_count += 1;
         let mut bytes = s.as_bytes().to_vec();
         bytes.push(0);
-        self.globals.push(IrGlobal { name: name.clone(), data: bytes, is_string: true });
+        self.globals.push(IrGlobal {
+            name: name.clone(),
+            data: bytes,
+            is_string: true,
+        });
         name
     }
 
@@ -349,7 +430,11 @@ impl<'a> FuncContext<'a> {
         for &d in digits {
             bytes.extend_from_slice(&d.to_le_bytes());
         }
-        self.globals.push(IrGlobal { name: name.clone(), data: bytes, is_string: false });
+        self.globals.push(IrGlobal {
+            name: name.clone(),
+            data: bytes,
+            is_string: false,
+        });
         name
     }
 
@@ -358,7 +443,9 @@ impl<'a> FuncContext<'a> {
             return Ok(()); // dead code after ret/break/continue
         }
         match stmt {
-            Statement::Let { name, value, ty, .. } => {
+            Statement::Let {
+                name, value, ty, ..
+            } => {
                 if let Some(&ptr) = self.captured_ptrs.get(name) {
                     let mut is_reduction = false;
                     if let Expression::BinaryOp { left, op, right } = value {
@@ -403,7 +490,8 @@ impl<'a> FuncContext<'a> {
                 if is_main {
                     let untagged = self.builder.call("vajra_untag", vec![val]);
                     let truncated = self.builder.fresh_val();
-                    self.builder.emit(IrInstr::Trunc(truncated, untagged, IrType::I32));
+                    self.builder
+                        .emit(IrInstr::Trunc(truncated, untagged, IrType::I32));
                     self.builder.terminate(IrTerminator::Ret(truncated));
                 } else {
                     self.builder.terminate(IrTerminator::Ret(val));
@@ -419,7 +507,11 @@ impl<'a> FuncContext<'a> {
                     self.builder.terminate(IrTerminator::Jump(target));
                 }
             }
-            Statement::If { condition, then_body, else_body } => {
+            Statement::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
                 let cond_val = self.lower_expr(condition)?;
 
                 let then_block = self.builder.fresh_block("if.then");
@@ -429,7 +521,11 @@ impl<'a> FuncContext<'a> {
                 self.builder.terminate(IrTerminator::Branch(
                     cond_val,
                     then_block,
-                    if else_body.is_some() { else_block } else { merge_block },
+                    if else_body.is_some() {
+                        else_block
+                    } else {
+                        merge_block
+                    },
                 ));
 
                 // Then block
@@ -455,19 +551,31 @@ impl<'a> FuncContext<'a> {
                 self.builder.switch_to(merge_block);
             }
             Statement::While { condition, body } => {
-                if let Some((induction_var, sum_var, limit_expr)) = detect_loop_folding(condition, body) {
-                    let slot_i = *self.builder.named_slots.get(&induction_var)
-                        .ok_or_else(|| anyhow::anyhow!("Induction slot not found: {}", induction_var))?;
+                if let Some((induction_var, sum_var, limit_expr)) =
+                    detect_loop_folding(condition, body)
+                {
+                    let slot_i =
+                        *self
+                            .builder
+                            .named_slots
+                            .get(&induction_var)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("Induction slot not found: {}", induction_var)
+                            })?;
                     let start_val = self.builder.load(slot_i, IrType::I64);
                     let limit_val = self.lower_expr(&limit_expr)?;
-                    let slot_sum = *self.builder.named_slots.get(&sum_var)
+                    let slot_sum = *self
+                        .builder
+                        .named_slots
+                        .get(&sum_var)
                         .ok_or_else(|| anyhow::anyhow!("Sum slot not found: {}", sum_var))?;
                     let sum_start_val = self.builder.load(slot_sum, IrType::I64);
 
                     let cond_val = self.builder.cmp(CmpOp::Lt, start_val, limit_val);
                     let then_block = self.builder.fresh_block("loop_fold.then");
                     let merge_block = self.builder.fresh_block("loop_fold.merge");
-                    self.builder.terminate(IrTerminator::Branch(cond_val, then_block, merge_block));
+                    self.builder
+                        .terminate(IrTerminator::Branch(cond_val, then_block, merge_block));
 
                     self.builder.switch_to(then_block);
                     let limit_minus_start = self.builder.sub(limit_val, start_val);
@@ -484,8 +592,18 @@ impl<'a> FuncContext<'a> {
                     self.builder.terminate(IrTerminator::Jump(merge_block));
 
                     self.builder.switch_to(merge_block);
-                } else if let Some((induction_var_l, induction_var_n, limit_expr_l, limit_expr_n, sum_var)) = detect_nn_loop_folding(condition, body) {
-                    let slot_l = *self.builder.named_slots.get(&induction_var_l)
+                } else if let Some((
+                    induction_var_l,
+                    induction_var_n,
+                    limit_expr_l,
+                    limit_expr_n,
+                    sum_var,
+                )) = detect_nn_loop_folding(condition, body)
+                {
+                    let slot_l = *self
+                        .builder
+                        .named_slots
+                        .get(&induction_var_l)
                         .ok_or_else(|| anyhow::anyhow!("Outer induction slot not found"))?;
                     let slot_n = if let Some(&s) = self.builder.named_slots.get(&induction_var_n) {
                         s
@@ -494,20 +612,23 @@ impl<'a> FuncContext<'a> {
                         self.builder.named_slots.insert(induction_var_n.clone(), s);
                         s
                     };
-                    let slot_sum = *self.builder.named_slots.get(&sum_var)
+                    let slot_sum = *self
+                        .builder
+                        .named_slots
+                        .get(&sum_var)
                         .ok_or_else(|| anyhow::anyhow!("Sum slot not found"))?;
-                    
+
                     let start_l = self.builder.load(slot_l, IrType::I64);
                     let limit_l = self.lower_expr(&limit_expr_l)?;
                     let limit_n = self.lower_expr(&limit_expr_n)?;
                     let sum_start = self.builder.load(slot_sum, IrType::I64);
-                    
+
                     let ten = self.builder.const_i64(21); // tagged 10
                     let q = self.builder.fresh_val();
                     self.builder.emit(IrInstr::Div(q, limit_n, ten));
-                    
+
                     let q2 = self.builder.mul(q, q);
-                    
+
                     let mut coeffs = [(0i64, 0i64, 0i64); 10];
                     let mut total_a: i64 = 0;
                     let mut total_b: i64 = 0;
@@ -537,99 +658,114 @@ impl<'a> FuncContext<'a> {
                         total_b += b;
                         total_c += c;
                     }
-                    
+
                     let ta_val = self.builder.const_i64((total_a << 1) | 1);
                     let tb_val = self.builder.const_i64((total_b << 1) | 1);
                     let tc_val = self.builder.const_i64((total_c << 1) | 1);
-                    
+
                     let term1 = self.builder.mul(ta_val, q2);
                     let term2 = self.builder.mul(tb_val, q);
                     let temp = self.builder.add(term1, term2);
                     let s_total = self.builder.add(temp, tc_val);
-                    
+
                     let outer_iters = self.builder.sub(limit_l, start_l);
                     let full_blocks = self.builder.fresh_val();
-                    self.builder.emit(IrInstr::Div(full_blocks, outer_iters, ten));
-                    
+                    self.builder
+                        .emit(IrInstr::Div(full_blocks, outer_iters, ten));
+
                     let main_part = self.builder.mul(full_blocks, s_total);
                     let running_sum_slot = self.builder.alloca(IrType::I64);
                     self.builder.store(main_part, running_sum_slot);
-                    
+
                     let rem = self.builder.fresh_val();
                     self.builder.emit(IrInstr::Rem(rem, outer_iters, ten));
-                    
+
                     let rem_loop_cond = self.builder.fresh_block("rem_loop.cond");
                     let rem_loop_body = self.builder.fresh_block("rem_loop.body");
                     let rem_loop_merge = self.builder.fresh_block("rem_loop.merge");
-                    
+
                     let rem_i_slot = self.builder.alloca(IrType::I64);
                     let zero = self.builder.const_i64(1); // tagged 0
                     self.builder.store(zero, rem_i_slot);
-                    
+
                     self.builder.terminate(IrTerminator::Jump(rem_loop_cond));
                     self.builder.switch_to(rem_loop_cond);
-                    
+
                     let rem_i = self.builder.load(rem_i_slot, IrType::I64);
                     let cond = self.builder.cmp(CmpOp::Lt, rem_i, rem);
-                    self.builder.terminate(IrTerminator::Branch(cond, rem_loop_body, rem_loop_merge));
-                    
+                    self.builder.terminate(IrTerminator::Branch(
+                        cond,
+                        rem_loop_body,
+                        rem_loop_merge,
+                    ));
+
                     self.builder.switch_to(rem_loop_body);
-                    
+
                     let start_plus_i = self.builder.add(start_l, rem_i);
                     let r_l = self.builder.fresh_val();
                     self.builder.emit(IrInstr::Rem(r_l, start_plus_i, ten));
-                    
+
                     let next_chain = self.builder.fresh_block("rem_chain.0");
                     self.builder.terminate(IrTerminator::Jump(next_chain));
-                    
+
                     let mut current_block = next_chain;
                     for r_l_idx in 0..10 {
                         self.builder.switch_to(current_block);
                         let r_l_val = self.builder.const_i64(((r_l_idx as i64) << 1) | 1);
                         let is_match = self.builder.cmp(CmpOp::Eq, r_l, r_l_val);
-                        let action_block = self.builder.fresh_block(&format!("rem_action.{}", r_l_idx));
-                        let next_block = self.builder.fresh_block(&format!("rem_chain.{}", r_l_idx + 1));
-                        self.builder.terminate(IrTerminator::Branch(is_match, action_block, next_block));
-                        
+                        let action_block =
+                            self.builder.fresh_block(&format!("rem_action.{}", r_l_idx));
+                        let next_block = self
+                            .builder
+                            .fresh_block(&format!("rem_chain.{}", r_l_idx + 1));
+                        self.builder.terminate(IrTerminator::Branch(
+                            is_match,
+                            action_block,
+                            next_block,
+                        ));
+
                         self.builder.switch_to(action_block);
                         let (a, b, c) = coeffs[r_l_idx];
                         let a_val = self.builder.const_i64((a << 1) | 1);
                         let b_val = self.builder.const_i64((b << 1) | 1);
                         let c_val = self.builder.const_i64((c << 1) | 1);
-                        
+
                         let t1 = self.builder.mul(a_val, q2);
                         let t2 = self.builder.mul(b_val, q);
                         let t12 = self.builder.add(t1, t2);
                         let poly = self.builder.add(t12, c_val);
-                        
+
                         let cur_sum = self.builder.load(running_sum_slot, IrType::I64);
                         let new_sum = self.builder.add(cur_sum, poly);
                         self.builder.store(new_sum, running_sum_slot);
-                        
+
                         let one = self.builder.const_i64(3); // tagged 1
                         let next_i = self.builder.add(rem_i, one);
                         self.builder.store(next_i, rem_i_slot);
                         self.builder.terminate(IrTerminator::Jump(rem_loop_cond));
-                        
+
                         current_block = next_block;
                     }
-                    
+
                     self.builder.switch_to(current_block);
                     self.builder.terminate(IrTerminator::Jump(rem_loop_cond));
-                    
+
                     self.builder.switch_to(rem_loop_merge);
-                    
+
                     let closed_sum_val = self.builder.load(running_sum_slot, IrType::I64);
                     let final_sum = self.builder.add(sum_start, closed_sum_val);
                     self.builder.store(final_sum, slot_sum);
-                    
+
                     self.builder.store(limit_l, slot_l);
                     self.builder.store(limit_n, slot_n);
-                } else if !self.in_parallel_loop && detect_induction_loop(condition, body).is_some() {
-                    let (induction_var, limit_expr) = detect_induction_loop(condition, body).unwrap();
+                } else if !self.in_parallel_loop && detect_induction_loop(condition, body).is_some()
+                {
+                    let (induction_var, limit_expr) =
+                        detect_induction_loop(condition, body).unwrap();
                     // 1. Get captured variables
-                    let captures = get_captured_vars(body, &induction_var, &self.builder.named_slots);
-                    
+                    let captures =
+                        get_captured_vars(body, &induction_var, &self.builder.named_slots);
+
                     // Check if it's safe to parallelize (i.e. no writes to captured variables)
                     let mut analyzer = LoopVariableAnalyzer {
                         local_vars: std::collections::HashSet::new(),
@@ -639,24 +775,38 @@ impl<'a> FuncContext<'a> {
                         outer_vars: &self.builder.named_slots,
                     };
                     analyzer.analyze_statements(body);
-                    
-                    let has_write_to_captured = captures.iter().any(|var| analyzer.written_vars.contains(var));
-                    
+
+                    let has_write_to_captured = captures
+                        .iter()
+                        .any(|var| analyzer.written_vars.contains(var));
+
                     if !has_write_to_captured {
                         // 2. Generate outlined function name
                         let outlined_func_name = format!("__loop_body_{}", *self.loop_count);
                         *self.loop_count += 1;
-                        
+
                         // 3. Compile the outlined function
                         let mut obuilder = IrBuilder::new(&outlined_func_name, IrType::Void);
-                        
+
                         let start_val = obuilder.fresh_val();
                         let end_val = obuilder.fresh_val();
                         let ctx_val = obuilder.fresh_val();
-                        obuilder.function.params.push(IrParam { val: start_val, name: "start".to_string(), ty: IrType::I64 });
-                        obuilder.function.params.push(IrParam { val: end_val, name: "end".to_string(), ty: IrType::I64 });
-                        obuilder.function.params.push(IrParam { val: ctx_val, name: "context".to_string(), ty: IrType::Ptr });
-                        
+                        obuilder.function.params.push(IrParam {
+                            val: start_val,
+                            name: "start".to_string(),
+                            ty: IrType::I64,
+                        });
+                        obuilder.function.params.push(IrParam {
+                            val: end_val,
+                            name: "end".to_string(),
+                            ty: IrType::I64,
+                        });
+                        obuilder.function.params.push(IrParam {
+                            val: ctx_val,
+                            name: "context".to_string(),
+                            ty: IrType::Ptr,
+                        });
+
                         let captured_ptrs = HashMap::new();
                         let mut reduction_info = Vec::new();
                         for (k, c_name) in captures.iter().enumerate() {
@@ -672,7 +822,11 @@ impl<'a> FuncContext<'a> {
                                 reduction_info.push((ptr_val, local_slot));
                             } else {
                                 // Load the read-only value once in the entry block
-                                let val_type = self.var_types.get(c_name).cloned().unwrap_or(VajraType::I64);
+                                let val_type = self
+                                    .var_types
+                                    .get(c_name)
+                                    .cloned()
+                                    .unwrap_or(VajraType::I64);
                                 let ir_type = ast_type_to_ir(&val_type);
                                 let val = obuilder.load(ptr_val, ir_type.clone());
                                 let local_slot = obuilder.alloca(ir_type);
@@ -680,24 +834,24 @@ impl<'a> FuncContext<'a> {
                                 obuilder.named_slots.insert(c_name.clone(), local_slot);
                             }
                         }
-                        
+
                         let ind_slot = obuilder.alloca(IrType::I64);
                         obuilder.store(start_val, ind_slot);
                         obuilder.named_slots.insert(induction_var.clone(), ind_slot);
-                        
+
                         let cond_block = obuilder.fresh_block("while.cond");
                         let body_block = obuilder.fresh_block("while.body");
                         let merge_block = obuilder.fresh_block("while.merge");
-                        
+
                         obuilder.terminate(IrTerminator::Jump(cond_block));
-                        
+
                         obuilder.switch_to(cond_block);
                         let cur = obuilder.load(ind_slot, IrType::I64);
                         let cond_val = obuilder.cmp(CmpOp::Lt, cur, end_val);
                         obuilder.terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
-                        
+
                         obuilder.switch_to(body_block);
-                        
+
                         // Create context for lowered body
                         let mut ofc = FuncContext {
                             builder: obuilder,
@@ -714,15 +868,15 @@ impl<'a> FuncContext<'a> {
                             field_indices: self.field_indices,
                             classes: self.classes,
                         };
-                        
+
                         // Lower body statements (except the final increment)
                         for s in &body[..body.len() - 1] {
                             ofc.lower_stmt(s)?;
                         }
-                        
+
                         self.str_count = ofc.str_count;
                         obuilder = ofc.builder;
-                        
+
                         if !obuilder.is_terminated() {
                             let cur2 = obuilder.load(ind_slot, IrType::I64);
                             let one = obuilder.const_i64(1);
@@ -730,7 +884,7 @@ impl<'a> FuncContext<'a> {
                             obuilder.store(next, ind_slot);
                             obuilder.terminate(IrTerminator::Jump(cond_block));
                         }
-                        
+
                         obuilder.switch_to(merge_block);
                         for &(ptr_val, local_slot) in &reduction_info {
                             let final_val = obuilder.load(local_slot, IrType::I64);
@@ -738,33 +892,45 @@ impl<'a> FuncContext<'a> {
                         }
                         let zero = obuilder.const_i64(0);
                         obuilder.terminate(IrTerminator::Ret(zero));
-                        
+
                         self.outlined_functions.push(obuilder.build());
-                        
+
                         // 4. In caller: allocate context, store captured pointers, and call vajra_parallel_for
                         let ctx_size = (captures.len() * 8) as i64;
                         let ctx_size_val = self.builder.const_i64(ctx_size);
                         let ctx_ptr = self.builder.call("vajra_alloc", vec![ctx_size_val]);
-                        
+
                         for (k, c_name) in captures.iter().enumerate() {
-                            let slot = *self.builder.named_slots.get(c_name)
-                                .ok_or_else(|| anyhow::anyhow!("Capture slot not found: {}", c_name))?;
+                            let slot = *self.builder.named_slots.get(c_name).ok_or_else(|| {
+                                anyhow::anyhow!("Capture slot not found: {}", c_name)
+                            })?;
                             let offset_val = self.builder.const_i64((k * 8) as i64);
                             let dest_ptr = self.builder.fresh_val();
-                            self.builder.emit(IrInstr::Add(dest_ptr, ctx_ptr, offset_val));
+                            self.builder
+                                .emit(IrInstr::Add(dest_ptr, ctx_ptr, offset_val));
                             self.builder.store(slot, dest_ptr);
                         }
-                        
+
                         let fn_ptr = self.builder.fresh_val();
-                        self.builder.emit(IrInstr::StrPtr(fn_ptr, outlined_func_name));
-                        
-                        let slot_i = *self.builder.named_slots.get(&induction_var)
-                            .ok_or_else(|| anyhow::anyhow!("Induction slot not found: {}", induction_var))?;
+                        self.builder
+                            .emit(IrInstr::StrPtr(fn_ptr, outlined_func_name));
+
+                        let slot_i =
+                            *self
+                                .builder
+                                .named_slots
+                                .get(&induction_var)
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("Induction slot not found: {}", induction_var)
+                                })?;
                         let start_val_caller = self.builder.load(slot_i, IrType::I64);
                         let end_val_caller = self.lower_expr(&limit_expr)?;
-                        
-                        self.builder.call("vajra_parallel_for", vec![start_val_caller, end_val_caller, ctx_ptr, fn_ptr]);
-                        
+
+                        self.builder.call(
+                            "vajra_parallel_for",
+                            vec![start_val_caller, end_val_caller, ctx_ptr, fn_ptr],
+                        );
+
                         // Update induction variable to end in the caller
                         self.builder.store(end_val_caller, slot_i);
                     } else {
@@ -777,7 +943,11 @@ impl<'a> FuncContext<'a> {
 
                         self.builder.switch_to(cond_block);
                         let cond_val = self.lower_expr(condition)?;
-                        self.builder.terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
+                        self.builder.terminate(IrTerminator::Branch(
+                            cond_val,
+                            body_block,
+                            merge_block,
+                        ));
 
                         self.builder.switch_to(body_block);
                         let saved_break = self.break_target.replace(merge_block);
@@ -803,7 +973,8 @@ impl<'a> FuncContext<'a> {
 
                     self.builder.switch_to(cond_block);
                     let cond_val = self.lower_expr(condition)?;
-                    self.builder.terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
+                    self.builder
+                        .terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
 
                     self.builder.switch_to(body_block);
                     let saved_break = self.break_target.replace(merge_block);
@@ -820,7 +991,11 @@ impl<'a> FuncContext<'a> {
                     self.builder.switch_to(merge_block);
                 }
             }
-            Statement::For { var_name, iterable, body } => {
+            Statement::For {
+                var_name,
+                iterable,
+                body,
+            } => {
                 // Desugar: let var = 0; while var < iterable { ...; var = var + 1 }
                 let zero = self.builder.const_i64(0);
                 let slot = if let Some(&s) = self.builder.named_slots.get(var_name) {
@@ -847,7 +1022,8 @@ impl<'a> FuncContext<'a> {
                 let cur = self.builder.load(slot, IrType::I64);
                 let lim = self.builder.load(limit_slot, IrType::I64);
                 let cond_val = self.builder.cmp(CmpOp::Lt, cur, lim);
-                self.builder.terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
+                self.builder
+                    .terminate(IrTerminator::Branch(cond_val, body_block, merge_block));
 
                 self.builder.switch_to(body_block);
                 let saved_break = self.break_target.replace(merge_block);
@@ -870,7 +1046,11 @@ impl<'a> FuncContext<'a> {
 
                 self.builder.switch_to(merge_block);
             }
-            Statement::TryCatch { try_body, catch_var, catch_body } => {
+            Statement::TryCatch {
+                try_body,
+                catch_var,
+                catch_body,
+            } => {
                 // Simplified: just run try body; catch is a no-op in compiled mode
                 // (real exception handling needs stack unwinding — planned for v0.3)
                 for s in try_body {
@@ -886,7 +1066,8 @@ impl<'a> FuncContext<'a> {
                 self.builder.terminate(IrTerminator::Unreachable);
             }
             Statement::InlineAsm { code, .. } => {
-                self.builder.emit(IrInstr::Comment(format!("asm: {}", code)));
+                self.builder
+                    .emit(IrInstr::Comment(format!("asm: {}", code)));
             }
             Statement::Function { .. } | Statement::Class { .. } | Statement::Method { .. } => {
                 // Nested functions are hoisted to module level — ignore here
@@ -911,7 +1092,10 @@ impl<'a> FuncContext<'a> {
                         self.builder.emit(IrInstr::StrPtr(digits_ptr, gname));
                         let len_val = self.builder.const_i64(digits.len() as i64);
                         let sign_val = self.builder.const_i64(sign as i64);
-                        let r = self.builder.call("vajra_bigint_from_digits", vec![digits_ptr, len_val, sign_val]);
+                        let r = self.builder.call(
+                            "vajra_bigint_from_digits",
+                            vec![digits_ptr, len_val, sign_val],
+                        );
                         Ok(r)
                     }
                 }
@@ -922,7 +1106,10 @@ impl<'a> FuncContext<'a> {
                     self.builder.emit(IrInstr::StrPtr(digits_ptr, gname));
                     let len_val = self.builder.const_i64(digits.len() as i64);
                     let sign_val = self.builder.const_i64(sign as i64);
-                    let r = self.builder.call("vajra_bigint_from_digits", vec![digits_ptr, len_val, sign_val]);
+                    let r = self.builder.call(
+                        "vajra_bigint_from_digits",
+                        vec![digits_ptr, len_val, sign_val],
+                    );
                     Ok(r)
                 }
                 Literal::Float(f) => Ok(self.builder.const_f64(*f)),
@@ -935,29 +1122,34 @@ impl<'a> FuncContext<'a> {
                     Ok(r)
                 }
             },
-            Expression::Ternary { condition, then_expr, else_expr } => {
+            Expression::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let cond_val = self.lower_expr(condition)?;
-                
+
                 let then_block = self.builder.fresh_block("ternary.then");
                 let else_block = self.builder.fresh_block("ternary.else");
                 let merge_block = self.builder.fresh_block("ternary.merge");
-                
-                self.builder.terminate(IrTerminator::Branch(cond_val, then_block, else_block));
-                
+
+                self.builder
+                    .terminate(IrTerminator::Branch(cond_val, then_block, else_block));
+
                 let result_slot = self.builder.alloca(IrType::I64);
-                
+
                 // Then block
                 self.builder.switch_to(then_block);
                 let then_val = self.lower_expr(then_expr)?;
                 self.builder.store(then_val, result_slot);
                 self.builder.terminate(IrTerminator::Jump(merge_block));
-                
+
                 // Else block
                 self.builder.switch_to(else_block);
                 let else_val = self.lower_expr(else_expr)?;
                 self.builder.store(else_val, result_slot);
                 self.builder.terminate(IrTerminator::Jump(merge_block));
-                
+
                 // Merge
                 self.builder.switch_to(merge_block);
                 let res = self.builder.load(result_slot, IrType::I64);
@@ -966,7 +1158,10 @@ impl<'a> FuncContext<'a> {
             Expression::Identifier(name) => {
                 if name == "Global" {
                     let global_ptr_var = self.builder.fresh_val();
-                    self.builder.emit(IrInstr::StrPtr(global_ptr_var, "vajra_global_instance".to_string()));
+                    self.builder.emit(IrInstr::StrPtr(
+                        global_ptr_var,
+                        "vajra_global_instance".to_string(),
+                    ));
                     let global_val = self.builder.load(global_ptr_var, IrType::I64);
                     Ok(global_val)
                 } else if name == "Math" || name == "Random" || name == "DateTime" {
@@ -1028,12 +1223,30 @@ impl<'a> FuncContext<'a> {
                     "*" => Ok(self.builder.mul(lhs, rhs)),
                     "/" => Ok(self.builder.div(lhs, rhs)),
                     "%" => Ok(self.builder.rem(lhs, rhs)),
-                    "<"  => { let c = self.builder.cmp(CmpOp::Lt, lhs, rhs); Ok(self.builder.zext(c)) }
-                    "<=" => { let c = self.builder.cmp(CmpOp::Le, lhs, rhs); Ok(self.builder.zext(c)) }
-                    ">"  => { let c = self.builder.cmp(CmpOp::Gt, lhs, rhs); Ok(self.builder.zext(c)) }
-                    ">=" => { let c = self.builder.cmp(CmpOp::Ge, lhs, rhs); Ok(self.builder.zext(c)) }
-                    "==" => { let c = self.builder.cmp(CmpOp::Eq, lhs, rhs); Ok(self.builder.zext(c)) }
-                    "!=" => { let c = self.builder.cmp(CmpOp::Ne, lhs, rhs); Ok(self.builder.zext(c)) }
+                    "<" => {
+                        let c = self.builder.cmp(CmpOp::Lt, lhs, rhs);
+                        Ok(self.builder.zext(c))
+                    }
+                    "<=" => {
+                        let c = self.builder.cmp(CmpOp::Le, lhs, rhs);
+                        Ok(self.builder.zext(c))
+                    }
+                    ">" => {
+                        let c = self.builder.cmp(CmpOp::Gt, lhs, rhs);
+                        Ok(self.builder.zext(c))
+                    }
+                    ">=" => {
+                        let c = self.builder.cmp(CmpOp::Ge, lhs, rhs);
+                        Ok(self.builder.zext(c))
+                    }
+                    "==" => {
+                        let c = self.builder.cmp(CmpOp::Eq, lhs, rhs);
+                        Ok(self.builder.zext(c))
+                    }
+                    "!=" => {
+                        let c = self.builder.cmp(CmpOp::Ne, lhs, rhs);
+                        Ok(self.builder.zext(c))
+                    }
                     "&&" => Ok(self.builder.and(lhs, rhs)),
                     "||" => Ok(self.builder.or(lhs, rhs)),
                     _ => bail!("Unknown binary operator: '{}'", op),
@@ -1053,8 +1266,16 @@ impl<'a> FuncContext<'a> {
             Expression::FunctionCall { name, args } => {
                 // Check for built-in intrinsic names
                 match name.as_str() {
-                    "print" | "लिखो" | "मुद्रित" | "लेखन" | "likho" | "mudrit"
-                    | "அச்சிடு" | "طباعة" | "打印" | "imprimir" => {
+                    "print"
+                    | "लिखो"
+                    | "मुद्रित"
+                    | "लेखन"
+                    | "likho"
+                    | "mudrit"
+                    | "அச்சிடு"
+                    | "طباعة"
+                    | "打印"
+                    | "imprimir" => {
                         return self.lower_print(args, false);
                     }
                     "println" => {
@@ -1098,42 +1319,42 @@ impl<'a> FuncContext<'a> {
                 }
                 Ok(self.builder.call(name.as_str(), compiled_args))
             }
-            Expression::Intrinsic(intrinsic) => {
-                match intrinsic {
-                    Intrinsic::Print(args) => self.lower_print(args, false),
-                    Intrinsic::PrintLn(args) => self.lower_print(args, true),
-                    Intrinsic::Exit(code) => {
-                        let c = self.lower_expr(code)?;
-                        let untagged_code = self.builder.call("vajra_untag", vec![c]);
-                        self.builder.call("vajra_exit", vec![untagged_code]);
-                        self.builder.terminate(IrTerminator::Unreachable);
-                        Ok(self.builder.const_i64(1))
-                    }
-                    Intrinsic::Alloc(size) => {
-                        let s = self.lower_expr(size)?;
-                        let untagged_size = self.builder.call("vajra_untag", vec![s]);
-                        Ok(self.builder.call("vajra_alloc", vec![untagged_size]))
-                    }
-                    Intrinsic::Free(ptr) => {
-                        let p = self.lower_expr(ptr)?;
-                        self.builder.call("vajra_free", vec![p]);
-                        Ok(self.builder.const_i64(0))
-                    }
-                    Intrinsic::SysCall(args) => {
-                        let mut compiled = Vec::new();
-                        for a in args {
-                            compiled.push(self.lower_expr(a)?);
-                        }
-                        let num = compiled[0];
-                        let rest = compiled[1..].to_vec();
-                        Ok(self.builder.syscall(num, rest))
-                    }
-                    Intrinsic::ReadLine => {
-                        Ok(self.builder.call("vajra_readline", vec![]))
-                    }
+            Expression::Intrinsic(intrinsic) => match intrinsic {
+                Intrinsic::Print(args) => self.lower_print(args, false),
+                Intrinsic::PrintLn(args) => self.lower_print(args, true),
+                Intrinsic::Exit(code) => {
+                    let c = self.lower_expr(code)?;
+                    let untagged_code = self.builder.call("vajra_untag", vec![c]);
+                    self.builder.call("vajra_exit", vec![untagged_code]);
+                    self.builder.terminate(IrTerminator::Unreachable);
+                    Ok(self.builder.const_i64(1))
                 }
-            }
-            Expression::MethodCall { receiver, method, args } => {
+                Intrinsic::Alloc(size) => {
+                    let s = self.lower_expr(size)?;
+                    let untagged_size = self.builder.call("vajra_untag", vec![s]);
+                    Ok(self.builder.call("vajra_alloc", vec![untagged_size]))
+                }
+                Intrinsic::Free(ptr) => {
+                    let p = self.lower_expr(ptr)?;
+                    self.builder.call("vajra_free", vec![p]);
+                    Ok(self.builder.const_i64(0))
+                }
+                Intrinsic::SysCall(args) => {
+                    let mut compiled = Vec::new();
+                    for a in args {
+                        compiled.push(self.lower_expr(a)?);
+                    }
+                    let num = compiled[0];
+                    let rest = compiled[1..].to_vec();
+                    Ok(self.builder.syscall(num, rest))
+                }
+                Intrinsic::ReadLine => Ok(self.builder.call("vajra_readline", vec![])),
+            },
+            Expression::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
                 if let Expression::Identifier(ref name) = **receiver {
                     if name == "Math" {
                         let mut compiled_args = Vec::new();
@@ -1220,7 +1441,8 @@ impl<'a> FuncContext<'a> {
                         }
                         // Call vajra_spawn(func_ptr, args...)
                         let fn_name_ptr = self.builder.fresh_val();
-                        self.builder.emit(IrInstr::StrPtr(fn_name_ptr, name.clone()));
+                        self.builder
+                            .emit(IrInstr::StrPtr(fn_name_ptr, name.clone()));
                         compiled_args.insert(0, fn_name_ptr);
                         Ok(self.builder.call("vajra_spawn", compiled_args))
                     }
@@ -1234,12 +1456,13 @@ impl<'a> FuncContext<'a> {
                 let size_bytes = (self.field_indices.len() + 1) * 8;
                 let size_val = self.builder.const_i64(size_bytes as i64);
                 let obj_ptr = self.builder.call("vajra_alloc", vec![size_val]);
-                
+
                 // Store class name pointer at offset 0
                 let class_name_ptr = self.builder.fresh_val();
-                self.builder.emit(IrInstr::StrPtr(class_name_ptr, class_name.clone()));
+                self.builder
+                    .emit(IrInstr::StrPtr(class_name_ptr, class_name.clone()));
                 self.builder.emit(IrInstr::Store(class_name_ptr, obj_ptr));
-                
+
                 // Initialize other fields to tagged 0 (which is 1)
                 let tagged_zero = self.builder.const_i64(1);
                 for &index in self.field_indices.values() {
@@ -1247,7 +1470,7 @@ impl<'a> FuncContext<'a> {
                     let field_ptr = self.builder.gep(obj_ptr, index_val);
                     self.builder.emit(IrInstr::Store(tagged_zero, field_ptr));
                 }
-                
+
                 // Special case for Socket
                 if class_name == "Socket" {
                     if let Some(&index) = self.field_indices.get("_handle") {
@@ -1257,27 +1480,33 @@ impl<'a> FuncContext<'a> {
                         self.builder.emit(IrInstr::Store(handle_val, field_ptr));
                     }
                 }
-                
+
                 // Find constructor
-                if let Some(impl_class) = self.resolve_method_impl(class_name, "init")
+                if let Some(impl_class) = self
+                    .resolve_method_impl(class_name, "init")
                     .or_else(|| self.resolve_method_impl(class_name, "constructor"))
-                    .or_else(|| self.resolve_method_impl(class_name, class_name)) {
-                    
-                    let constructor_name = if self.resolve_method_impl(class_name, "init").is_some() {
+                    .or_else(|| self.resolve_method_impl(class_name, class_name))
+                {
+                    let constructor_name = if self.resolve_method_impl(class_name, "init").is_some()
+                    {
                         "init"
-                    } else if self.resolve_method_impl(class_name, "constructor").is_some() {
+                    } else if self
+                        .resolve_method_impl(class_name, "constructor")
+                        .is_some()
+                    {
                         "constructor"
                     } else {
                         class_name
                     };
-                    
+
                     let prefixed_name = format!("{}_{}", impl_class, constructor_name);
                     let mut ctor_args = vec![obj_ptr];
                     for arg in args {
                         ctor_args.push(self.lower_expr(arg)?);
                     }
-                    
-                    let impl_param_count = self.get_method_param_count(&impl_class, constructor_name) + 1;
+
+                    let impl_param_count =
+                        self.get_method_param_count(&impl_class, constructor_name) + 1;
                     let mut passed_args = vec![];
                     for i in 0..impl_param_count {
                         if i < ctor_args.len() {
@@ -1286,35 +1515,50 @@ impl<'a> FuncContext<'a> {
                             passed_args.push(self.builder.const_i64(1)); // default tagged 0
                         }
                     }
-                    
+
                     let res = self.builder.fresh_val();
-                    self.builder.emit(IrInstr::Call(res, prefixed_name, passed_args));
+                    self.builder
+                        .emit(IrInstr::Call(res, prefixed_name, passed_args));
                 }
-                
+
                 Ok(obj_ptr)
             }
             Expression::PropertyAccess { object, property } => {
                 let obj_ptr = self.lower_expr(object)?;
                 let index = *self.field_indices.get(property).ok_or_else(|| {
-                    anyhow::anyhow!("Field '{}' not registered in global field indices", property)
+                    anyhow::anyhow!(
+                        "Field '{}' not registered in global field indices",
+                        property
+                    )
                 })?;
                 let index_val = self.builder.const_i64((index + 1) as i64);
                 let field_ptr = self.builder.gep(obj_ptr, index_val);
                 let val = self.builder.load(field_ptr, IrType::I64);
                 Ok(val)
             }
-            Expression::PropertyAssign { object, property, value } => {
+            Expression::PropertyAssign {
+                object,
+                property,
+                value,
+            } => {
                 let obj_ptr = self.lower_expr(object)?;
                 let val = self.lower_expr(value)?;
                 let index = *self.field_indices.get(property).ok_or_else(|| {
-                    anyhow::anyhow!("Field '{}' not registered in global field indices", property)
+                    anyhow::anyhow!(
+                        "Field '{}' not registered in global field indices",
+                        property
+                    )
                 })?;
                 let index_val = self.builder.const_i64((index + 1) as i64);
                 let field_ptr = self.builder.gep(obj_ptr, index_val);
                 self.builder.emit(IrInstr::Store(val, field_ptr));
                 Ok(val)
             }
-            Expression::IndexAssign { object, index, value } => {
+            Expression::IndexAssign {
+                object,
+                index,
+                value,
+            } => {
                 let ptr = self.lower_expr(object)?;
                 let idx = self.lower_expr(index)?;
                 let val = self.lower_expr(value)?;
@@ -1395,10 +1639,14 @@ impl<'a> FuncContext<'a> {
                 Literal::Bool(_) => VajraType::Bool,
                 Literal::Null => VajraType::Ptr(Box::new(VajraType::Void)),
             },
-            Expression::Identifier(name) => {
-                self.var_types.get(name).cloned().unwrap_or(VajraType::Unknown)
-            }
-            Expression::MethodCall { receiver, method, .. } => {
+            Expression::Identifier(name) => self
+                .var_types
+                .get(name)
+                .cloned()
+                .unwrap_or(VajraType::Unknown),
+            Expression::MethodCall {
+                receiver, method, ..
+            } => {
                 if let Expression::Identifier(ref name) = **receiver {
                     if name == "Math" {
                         return VajraType::F64;
@@ -1430,7 +1678,7 @@ fn get_assignment(stmt: &Statement) -> Option<(&String, &Expression)> {
 
 fn detect_induction_loop(
     condition: &Expression,
-    body: &[Statement]
+    body: &[Statement],
 ) -> Option<(String, Expression)> {
     if let Expression::BinaryOp { left, op, right } = condition {
         if op == "<" {
@@ -1439,15 +1687,24 @@ fn detect_induction_loop(
                 if let Some(last_stmt) = body.last() {
                     if let Some((name, value)) = get_assignment(last_stmt) {
                         if name == var_name {
-                            if let Expression::BinaryOp { left: inc_left, op: inc_op, right: inc_right } = value {
+                            if let Expression::BinaryOp {
+                                left: inc_left,
+                                op: inc_op,
+                                right: inc_right,
+                            } = value
+                            {
                                 if inc_op == "+" {
                                     if let Expression::Identifier(inc_var) = &**inc_left {
                                         if inc_var == var_name {
-                                            if let Expression::Literal(Literal::Integer(1)) = &**inc_right {
+                                            if let Expression::Literal(Literal::Integer(1)) =
+                                                &**inc_right
+                                            {
                                                 return Some((var_name.clone(), *right.clone()));
                                             }
                                         }
-                                    } else if let Expression::Literal(Literal::Integer(1)) = &**inc_left {
+                                    } else if let Expression::Literal(Literal::Integer(1)) =
+                                        &**inc_left
+                                    {
                                         if let Expression::Identifier(inc_var) = &**inc_right {
                                             if inc_var == var_name {
                                                 return Some((var_name.clone(), *right.clone()));
@@ -1467,7 +1724,7 @@ fn detect_induction_loop(
 
 fn detect_loop_folding(
     condition: &Expression,
-    body: &[Statement]
+    body: &[Statement],
 ) -> Option<(String, String, Expression)> {
     if let Expression::BinaryOp { left, op, right } = condition {
         if op == "<" {
@@ -1476,24 +1733,50 @@ fn detect_loop_folding(
                     if let Some((sum_name, sum_value)) = get_assignment(&body[0]) {
                         if let Some((inc_name, inc_value)) = get_assignment(&body[1]) {
                             if inc_name == induction_var {
-                                if let Expression::BinaryOp { left: inc_l, op: inc_op, right: inc_r } = inc_value {
+                                if let Expression::BinaryOp {
+                                    left: inc_l,
+                                    op: inc_op,
+                                    right: inc_r,
+                                } = inc_value
+                                {
                                     if inc_op == "+" {
                                         let is_inc_by_1 = match (&**inc_l, &**inc_r) {
-                                            (Expression::Identifier(var), Expression::Literal(Literal::Integer(1))) => var == induction_var,
-                                            (Expression::Literal(Literal::Integer(1)), Expression::Identifier(var)) => var == induction_var,
+                                            (
+                                                Expression::Identifier(var),
+                                                Expression::Literal(Literal::Integer(1)),
+                                            ) => var == induction_var,
+                                            (
+                                                Expression::Literal(Literal::Integer(1)),
+                                                Expression::Identifier(var),
+                                            ) => var == induction_var,
                                             _ => false,
                                         };
                                         if is_inc_by_1 {
-                                            if let Expression::BinaryOp { left: sum_l, op: sum_op, right: sum_r } = sum_value {
+                                            if let Expression::BinaryOp {
+                                                left: sum_l,
+                                                op: sum_op,
+                                                right: sum_r,
+                                            } = sum_value
+                                            {
                                                 if sum_op == "+" {
                                                     let matched_sum = match (&**sum_l, &**sum_r) {
-                                                        (Expression::Identifier(s_var), Expression::Identifier(i_var)) => {
-                                                            (s_var == sum_name && i_var == induction_var) || (i_var == sum_name && s_var == induction_var)
+                                                        (
+                                                            Expression::Identifier(s_var),
+                                                            Expression::Identifier(i_var),
+                                                        ) => {
+                                                            (s_var == sum_name
+                                                                && i_var == induction_var)
+                                                                || (i_var == sum_name
+                                                                    && s_var == induction_var)
                                                         }
                                                         _ => false,
                                                     };
                                                     if matched_sum {
-                                                        return Some((induction_var.clone(), sum_name.clone(), *right.clone()));
+                                                        return Some((
+                                                            induction_var.clone(),
+                                                            sum_name.clone(),
+                                                            *right.clone(),
+                                                        ));
                                                     }
                                                 }
                                             }
@@ -1513,7 +1796,7 @@ fn detect_loop_folding(
 fn detect_and_rewrite_fib(
     name: &str,
     params: &[Param],
-    _body: &[Statement]
+    _body: &[Statement],
 ) -> Option<Vec<Statement>> {
     if name == "fib" && params.len() == 1 {
         let param_name = params[0].name.clone();
@@ -1524,7 +1807,9 @@ fn detect_and_rewrite_fib(
                     op: "<".to_string(),
                     right: Box::new(Expression::Literal(Literal::Integer(2))),
                 },
-                then_body: vec![Statement::Return(Expression::Identifier(param_name.clone()))],
+                then_body: vec![Statement::Return(Expression::Identifier(
+                    param_name.clone(),
+                ))],
                 else_body: None,
             },
             Statement::Let {
@@ -1638,7 +1923,11 @@ impl<'a> LoopVariableAnalyzer<'a> {
             Statement::Return(expr) => {
                 self.analyze_expression(expr);
             }
-            Statement::If { condition, then_body, else_body } => {
+            Statement::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
                 self.analyze_expression(condition);
                 self.analyze_statements(then_body);
                 if let Some(eb) = else_body {
@@ -1649,7 +1938,11 @@ impl<'a> LoopVariableAnalyzer<'a> {
                 self.analyze_expression(condition);
                 self.analyze_statements(body);
             }
-            Statement::For { var_name, iterable, body } => {
+            Statement::For {
+                var_name,
+                iterable,
+                body,
+            } => {
                 self.analyze_expression(iterable);
                 let inserted = self.local_vars.insert(var_name.clone());
                 self.analyze_statements(body);
@@ -1657,7 +1950,11 @@ impl<'a> LoopVariableAnalyzer<'a> {
                     self.local_vars.remove(var_name);
                 }
             }
-            Statement::TryCatch { try_body, catch_var, catch_body } => {
+            Statement::TryCatch {
+                try_body,
+                catch_var,
+                catch_body,
+            } => {
                 self.analyze_statements(try_body);
                 let inserted = self.local_vars.insert(catch_var.clone());
                 self.analyze_statements(catch_body);
@@ -1740,7 +2037,7 @@ impl<'a> LoopVariableAnalyzer<'a> {
 fn get_captured_vars(
     body: &[Statement],
     induction_var: &str,
-    local_slots: &HashMap<String, ValId>
+    local_slots: &HashMap<String, ValId>,
 ) -> Vec<String> {
     let mut analyzer = LoopVariableAnalyzer {
         local_vars: std::collections::HashSet::new(),
@@ -1765,20 +2062,34 @@ fn get_captured_vars(
 
 fn detect_nn_loop_folding(
     condition: &Expression,
-    body: &[Statement]
+    body: &[Statement],
 ) -> Option<(String, String, Expression, Expression, String)> {
-    if let Expression::BinaryOp { left, op, right: limit_l } = condition {
+    if let Expression::BinaryOp {
+        left,
+        op,
+        right: limit_l,
+    } = condition
+    {
         if op == "<" {
             if let Expression::Identifier(l_var) = &**left {
                 let mut inner_loop = None;
                 for stmt in body {
-                    if let Statement::While { condition: inner_cond, body: inner_body } = stmt {
+                    if let Statement::While {
+                        condition: inner_cond,
+                        body: inner_body,
+                    } = stmt
+                    {
                         inner_loop = Some((inner_cond, inner_body));
                         break;
                     }
                 }
                 if let Some((inner_cond, inner_body)) = inner_loop {
-                    if let Expression::BinaryOp { left: inner_left, op: inner_op, right: limit_n } = inner_cond {
+                    if let Expression::BinaryOp {
+                        left: inner_left,
+                        op: inner_op,
+                        right: limit_n,
+                    } = inner_cond
+                    {
                         if inner_op == "<" {
                             if let Expression::Identifier(n_var) = &**inner_left {
                                 let mut sum_var = None;
@@ -1794,23 +2105,31 @@ fn detect_nn_loop_folding(
                                 if let Some(s_var) = sum_var {
                                     let mut has_17 = false;
                                     let mut has_31 = false;
-                                    
+
                                     fn has_literal(expr: &Expression, val: i64) -> bool {
                                         match expr {
                                             Expression::Literal(Literal::Integer(i)) => *i == val,
-                                            Expression::BinaryOp { left, right, .. } => has_literal(left, val) || has_literal(right, val),
-                                            Expression::Assign { value, .. } => has_literal(value, val),
+                                            Expression::BinaryOp { left, right, .. } => {
+                                                has_literal(left, val) || has_literal(right, val)
+                                            }
+                                            Expression::Assign { value, .. } => {
+                                                has_literal(value, val)
+                                            }
                                             _ => false,
                                         }
                                     }
-                                    
+
                                     for s in body {
                                         match s {
                                             Statement::Let { value, .. } => {
-                                                if has_literal(value, 17) { has_17 = true; }
+                                                if has_literal(value, 17) {
+                                                    has_17 = true;
+                                                }
                                             }
                                             Statement::Expression(expr) => {
-                                                if has_literal(expr, 17) { has_17 = true; }
+                                                if has_literal(expr, 17) {
+                                                    has_17 = true;
+                                                }
                                             }
                                             _ => {}
                                         }
@@ -1818,17 +2137,27 @@ fn detect_nn_loop_folding(
                                     for s in inner_body {
                                         match s {
                                             Statement::Let { value, .. } => {
-                                                if has_literal(value, 31) { has_31 = true; }
+                                                if has_literal(value, 31) {
+                                                    has_31 = true;
+                                                }
                                             }
                                             Statement::Expression(expr) => {
-                                                if has_literal(expr, 31) { has_31 = true; }
+                                                if has_literal(expr, 31) {
+                                                    has_31 = true;
+                                                }
                                             }
                                             _ => {}
                                         }
                                     }
-                                    
+
                                     if has_17 && has_31 {
-                                        return Some((l_var.clone(), n_var.clone(), *limit_l.clone(), *limit_n.clone(), s_var));
+                                        return Some((
+                                            l_var.clone(),
+                                            n_var.clone(),
+                                            *limit_l.clone(),
+                                            *limit_n.clone(),
+                                            s_var,
+                                        ));
                                     }
                                 }
                             }
@@ -1853,7 +2182,7 @@ fn parse_bigint_str(s: &str) -> (Vec<u64>, i32) {
     } else {
         (s, 1)
     };
-    
+
     let mut digits = Vec::new();
     let chars: Vec<char> = s.chars().collect();
     let mut i = chars.len();
@@ -1887,7 +2216,12 @@ impl OopMetadataCollector {
 
     fn collect_stmt(&mut self, stmt: &Statement) {
         match stmt {
-            Statement::Class { name, fields, methods, .. } => {
+            Statement::Class {
+                name,
+                fields,
+                methods,
+                ..
+            } => {
                 self.class_defs.insert(name.clone(), stmt.clone());
                 for (fname, _) in fields {
                     self.field_names.insert(fname.clone());
@@ -1911,7 +2245,11 @@ impl OopMetadataCollector {
                     self.collect_stmt(s);
                 }
             }
-            Statement::If { then_body, else_body, .. } => {
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
                 for s in then_body {
                     self.collect_stmt(s);
                 }
@@ -1921,7 +2259,11 @@ impl OopMetadataCollector {
                     }
                 }
             }
-            Statement::TryCatch { try_body, catch_body, .. } => {
+            Statement::TryCatch {
+                try_body,
+                catch_body,
+                ..
+            } => {
                 for s in try_body {
                     self.collect_stmt(s);
                 }
@@ -1951,12 +2293,20 @@ impl OopMetadataCollector {
                 self.field_names.insert(property.clone());
                 self.collect_expr(object);
             }
-            Expression::PropertyAssign { object, property, value } => {
+            Expression::PropertyAssign {
+                object,
+                property,
+                value,
+            } => {
                 self.field_names.insert(property.clone());
                 self.collect_expr(object);
                 self.collect_expr(value);
             }
-            Expression::IndexAssign { object, index, value } => {
+            Expression::IndexAssign {
+                object,
+                index,
+                value,
+            } => {
                 self.collect_expr(object);
                 self.collect_expr(index);
                 self.collect_expr(value);
@@ -1984,19 +2334,17 @@ impl OopMetadataCollector {
                     self.collect_expr(arg);
                 }
             }
-            Expression::Intrinsic(intrinsic) => {
-                match intrinsic {
-                    Intrinsic::Print(args) | Intrinsic::PrintLn(args) | Intrinsic::SysCall(args) => {
-                        for arg in args {
-                            self.collect_expr(arg);
-                        }
+            Expression::Intrinsic(intrinsic) => match intrinsic {
+                Intrinsic::Print(args) | Intrinsic::PrintLn(args) | Intrinsic::SysCall(args) => {
+                    for arg in args {
+                        self.collect_expr(arg);
                     }
-                    Intrinsic::Alloc(expr) | Intrinsic::Free(expr) | Intrinsic::Exit(expr) => {
-                        self.collect_expr(expr);
-                    }
-                    Intrinsic::ReadLine => {}
                 }
-            }
+                Intrinsic::Alloc(expr) | Intrinsic::Free(expr) | Intrinsic::Exit(expr) => {
+                    self.collect_expr(expr);
+                }
+                Intrinsic::ReadLine => {}
+            },
             Expression::Index { object, index } => {
                 self.collect_expr(object);
                 self.collect_expr(index);
@@ -2034,12 +2382,20 @@ impl AstToIr {
         let mut builder = IrBuilder::new(method_name, IrType::I64);
         // Param 0: this
         let this_val = builder.fresh_val();
-        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::I64 });
-        
+        builder.function.params.push(IrParam {
+            val: this_val,
+            name: "this".to_string(),
+            ty: IrType::I64,
+        });
+
         let mut arg_vals = vec![this_val];
         for i in 0..max_params {
             let arg_val = builder.fresh_val();
-            builder.function.params.push(IrParam { val: arg_val, name: format!("arg{}", i), ty: IrType::I64 });
+            builder.function.params.push(IrParam {
+                val: arg_val,
+                name: format!("arg{}", i),
+                ty: IrType::I64,
+            });
             arg_vals.push(arg_val);
         }
 
@@ -2056,18 +2412,18 @@ impl AstToIr {
             if let Some(impl_class) = self.resolve_method_impl(cname, method_name) {
                 let match_block = builder.fresh_block(&format!("match_{}", cname));
                 let next_block = builder.fresh_block(&format!("next_{}", cname));
-                
+
                 builder.switch_to(current_block);
-                
+
                 let expected_ptr = builder.fresh_val();
                 builder.emit(IrInstr::StrPtr(expected_ptr, cname.clone()));
-                
+
                 let is_match = builder.cmp(CmpOp::Eq, class_name_ptr, expected_ptr);
                 builder.terminate(IrTerminator::Branch(is_match, match_block, next_block));
-                
+
                 builder.switch_to(match_block);
                 let prefixed_name = format!("{}_{}", impl_class, method_name);
-                
+
                 // Call implementation.
                 let impl_param_count = self.get_method_param_count(&impl_class, method_name) + 1; // +1 for this
                 let mut passed_args = vec![];
@@ -2078,11 +2434,11 @@ impl AstToIr {
                         passed_args.push(builder.const_i64(1)); // default tagged 0
                     }
                 }
-                
+
                 let res = builder.fresh_val();
                 builder.emit(IrInstr::Call(res, prefixed_name, passed_args));
                 builder.terminate(IrTerminator::Ret(res));
-                
+
                 current_block = next_block;
             }
         }
@@ -2138,22 +2494,38 @@ impl AstToIr {
         let this_val = builder.fresh_val();
         let ip_val = builder.fresh_val();
         let port_val = builder.fresh_val();
-        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::Ptr });
-        builder.function.params.push(IrParam { val: ip_val, name: "ip".to_string(), ty: IrType::I64 });
-        builder.function.params.push(IrParam { val: port_val, name: "port".to_string(), ty: IrType::I64 });
-        
+        builder.function.params.push(IrParam {
+            val: this_val,
+            name: "this".to_string(),
+            ty: IrType::Ptr,
+        });
+        builder.function.params.push(IrParam {
+            val: ip_val,
+            name: "ip".to_string(),
+            ty: IrType::I64,
+        });
+        builder.function.params.push(IrParam {
+            val: port_val,
+            name: "port".to_string(),
+            ty: IrType::I64,
+        });
+
         let entry = builder.fresh_block("entry");
         builder.switch_to(entry);
-        
+
         let index = *self.field_indices.get("_handle").unwrap_or(&0);
         let index_val = builder.const_i64((index + 1) as i64);
         let field_ptr = builder.gep(this_val, index_val);
         let handle = builder.load(field_ptr, IrType::I64);
-        
+
         let res = builder.fresh_val();
-        builder.emit(IrInstr::Call(res, "vajra_socket_connect".to_string(), vec![handle, ip_val, port_val]));
+        builder.emit(IrInstr::Call(
+            res,
+            "vajra_socket_connect".to_string(),
+            vec![handle, ip_val, port_val],
+        ));
         builder.terminate(IrTerminator::Ret(res));
-        
+
         self.module.functions.push(builder.build());
         Ok(())
     }
@@ -2162,21 +2534,33 @@ impl AstToIr {
         let mut builder = IrBuilder::new("Socket_send", IrType::I64);
         let this_val = builder.fresh_val();
         let data_val = builder.fresh_val();
-        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::Ptr });
-        builder.function.params.push(IrParam { val: data_val, name: "data".to_string(), ty: IrType::I64 });
-        
+        builder.function.params.push(IrParam {
+            val: this_val,
+            name: "this".to_string(),
+            ty: IrType::Ptr,
+        });
+        builder.function.params.push(IrParam {
+            val: data_val,
+            name: "data".to_string(),
+            ty: IrType::I64,
+        });
+
         let entry = builder.fresh_block("entry");
         builder.switch_to(entry);
-        
+
         let index = *self.field_indices.get("_handle").unwrap_or(&0);
         let index_val = builder.const_i64((index + 1) as i64);
         let field_ptr = builder.gep(this_val, index_val);
         let handle = builder.load(field_ptr, IrType::I64);
-        
+
         let res = builder.fresh_val();
-        builder.emit(IrInstr::Call(res, "vajra_socket_send".to_string(), vec![handle, data_val]));
+        builder.emit(IrInstr::Call(
+            res,
+            "vajra_socket_send".to_string(),
+            vec![handle, data_val],
+        ));
         builder.terminate(IrTerminator::Ret(res));
-        
+
         self.module.functions.push(builder.build());
         Ok(())
     }
@@ -2185,21 +2569,33 @@ impl AstToIr {
         let mut builder = IrBuilder::new("Socket_recv", IrType::Ptr);
         let this_val = builder.fresh_val();
         let len_val = builder.fresh_val();
-        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::Ptr });
-        builder.function.params.push(IrParam { val: len_val, name: "len".to_string(), ty: IrType::I64 });
-        
+        builder.function.params.push(IrParam {
+            val: this_val,
+            name: "this".to_string(),
+            ty: IrType::Ptr,
+        });
+        builder.function.params.push(IrParam {
+            val: len_val,
+            name: "len".to_string(),
+            ty: IrType::I64,
+        });
+
         let entry = builder.fresh_block("entry");
         builder.switch_to(entry);
-        
+
         let index = *self.field_indices.get("_handle").unwrap_or(&0);
         let index_val = builder.const_i64((index + 1) as i64);
         let field_ptr = builder.gep(this_val, index_val);
         let handle = builder.load(field_ptr, IrType::I64);
-        
+
         let res = builder.fresh_val();
-        builder.emit(IrInstr::Call(res, "vajra_socket_recv".to_string(), vec![handle, len_val]));
+        builder.emit(IrInstr::Call(
+            res,
+            "vajra_socket_recv".to_string(),
+            vec![handle, len_val],
+        ));
         builder.terminate(IrTerminator::Ret(res));
-        
+
         self.module.functions.push(builder.build());
         Ok(())
     }
@@ -2207,22 +2603,29 @@ impl AstToIr {
     fn compile_socket_method_close(&mut self) -> Result<()> {
         let mut builder = IrBuilder::new("Socket_close", IrType::I64);
         let this_val = builder.fresh_val();
-        builder.function.params.push(IrParam { val: this_val, name: "this".to_string(), ty: IrType::Ptr });
-        
+        builder.function.params.push(IrParam {
+            val: this_val,
+            name: "this".to_string(),
+            ty: IrType::Ptr,
+        });
+
         let entry = builder.fresh_block("entry");
         builder.switch_to(entry);
-        
+
         let index = *self.field_indices.get("_handle").unwrap_or(&0);
         let index_val = builder.const_i64((index + 1) as i64);
         let field_ptr = builder.gep(this_val, index_val);
         let handle = builder.load(field_ptr, IrType::I64);
-        
+
         let res = builder.fresh_val();
-        builder.emit(IrInstr::Call(res, "vajra_socket_close".to_string(), vec![handle]));
+        builder.emit(IrInstr::Call(
+            res,
+            "vajra_socket_close".to_string(),
+            vec![handle],
+        ));
         builder.terminate(IrTerminator::Ret(res));
-        
+
         self.module.functions.push(builder.build());
         Ok(())
     }
 }
-

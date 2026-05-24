@@ -1,5 +1,27 @@
-/// Vajra Compiler — Public Library API
-/// No external compiler dependency (LLVM, GCC, MSVC, Clang) — 100% self-hosted.
+//! Vajra Compiler — Public Library API
+//! No external compiler dependency (LLVM, GCC, MSVC, Clang) — 100% self-hosted.
+
+#![allow(
+    clippy::needless_borrows_for_generic_args,
+    clippy::new_without_default,
+    clippy::collapsible_match,
+    clippy::single_match,
+    clippy::get_first,
+    clippy::missing_const_for_thread_local,
+    clippy::collapsible_if,
+    clippy::match_like_matches_macro,
+    clippy::manual_range_contains,
+    clippy::unnecessary_sort_by,
+    clippy::len_zero,
+    clippy::needless_range_loop,
+    clippy::if_same_then_else,
+    clippy::manual_strip,
+    clippy::implicit_saturating_sub,
+    clippy::for_kv_map,
+    clippy::empty_line_after_doc_comments,
+    clippy::chars_next_cmp,
+    clippy::manual_map
+)]
 
 pub mod ast;
 pub mod lexer;

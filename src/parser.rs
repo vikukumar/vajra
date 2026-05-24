@@ -327,7 +327,7 @@ impl<'a> Parser<'a> {
 
     fn get_precedence(kind: &TokenKind) -> i32 {
         match kind {
-            TokenKind::Dot | TokenKind::LParen | TokenKind::LBracket => 90,
+            TokenKind::Dot | TokenKind::LParen | TokenKind::LBracket | TokenKind::PlusPlus | TokenKind::MinusMinus => 90,
             TokenKind::Pow => 50,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => 40,
             TokenKind::Plus | TokenKind::Minus => 35,
@@ -360,6 +360,82 @@ impl<'a> Parser<'a> {
             }
 
             match &self.cur_token.kind {
+                TokenKind::PlusPlus => {
+                    self.next_token();
+                    left = match left {
+                        Expression::Identifier(name) => {
+                            Expression::Assign {
+                                name: name.clone(),
+                                value: Box::new(Expression::BinaryOp {
+                                    left: Box::new(Expression::Identifier(name)),
+                                    op: "+".to_string(),
+                                    right: Box::new(Expression::Literal(Literal::Integer(1)))
+                                })
+                            }
+                        }
+                        Expression::PropertyAccess { object, property } => {
+                            Expression::PropertyAssign {
+                                object: object.clone(),
+                                property: property.clone(),
+                                value: Box::new(Expression::BinaryOp {
+                                    left: Box::new(Expression::PropertyAccess { object: object.clone(), property: property.clone() }),
+                                    op: "+".to_string(),
+                                    right: Box::new(Expression::Literal(Literal::Integer(1)))
+                                })
+                            }
+                        }
+                        Expression::Index { object, index } => {
+                            Expression::IndexAssign {
+                                object: object.clone(),
+                                index: index.clone(),
+                                value: Box::new(Expression::BinaryOp {
+                                    left: Box::new(Expression::Index { object: object.clone(), index: index.clone() }),
+                                    op: "+".to_string(),
+                                    right: Box::new(Expression::Literal(Literal::Integer(1)))
+                                })
+                            }
+                        }
+                        _ => left,
+                    };
+                }
+                TokenKind::MinusMinus => {
+                    self.next_token();
+                    left = match left {
+                        Expression::Identifier(name) => {
+                            Expression::Assign {
+                                name: name.clone(),
+                                value: Box::new(Expression::BinaryOp {
+                                    left: Box::new(Expression::Identifier(name)),
+                                    op: "-".to_string(),
+                                    right: Box::new(Expression::Literal(Literal::Integer(1)))
+                                })
+                            }
+                        }
+                        Expression::PropertyAccess { object, property } => {
+                            Expression::PropertyAssign {
+                                object: object.clone(),
+                                property: property.clone(),
+                                value: Box::new(Expression::BinaryOp {
+                                    left: Box::new(Expression::PropertyAccess { object: object.clone(), property: property.clone() }),
+                                    op: "-".to_string(),
+                                    right: Box::new(Expression::Literal(Literal::Integer(1)))
+                                })
+                            }
+                        }
+                        Expression::Index { object, index } => {
+                            Expression::IndexAssign {
+                                object: object.clone(),
+                                index: index.clone(),
+                                value: Box::new(Expression::BinaryOp {
+                                    left: Box::new(Expression::Index { object: object.clone(), index: index.clone() }),
+                                    op: "-".to_string(),
+                                    right: Box::new(Expression::Literal(Literal::Integer(1)))
+                                })
+                            }
+                        }
+                        _ => left,
+                    };
+                }
                 TokenKind::Pow => {
                     self.next_token();
                     let right = self.parse_expression(next_prec - 1); // Right-associative!
@@ -537,6 +613,84 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         match &self.cur_token.kind.clone() {
+            TokenKind::PlusPlus => {
+                self.next_token();
+                let operand = self.parse_primary();
+                match operand {
+                    Expression::Identifier(name) => {
+                        Expression::Assign {
+                            name: name.clone(),
+                            value: Box::new(Expression::BinaryOp {
+                                left: Box::new(Expression::Identifier(name)),
+                                op: "+".to_string(),
+                                right: Box::new(Expression::Literal(Literal::Integer(1)))
+                            })
+                        }
+                    }
+                    Expression::PropertyAccess { object, property } => {
+                        Expression::PropertyAssign {
+                            object: object.clone(),
+                            property: property.clone(),
+                            value: Box::new(Expression::BinaryOp {
+                                left: Box::new(Expression::PropertyAccess { object: object.clone(), property: property.clone() }),
+                                op: "+".to_string(),
+                                right: Box::new(Expression::Literal(Literal::Integer(1)))
+                            })
+                        }
+                    }
+                    Expression::Index { object, index } => {
+                        Expression::IndexAssign {
+                            object: object.clone(),
+                            index: index.clone(),
+                            value: Box::new(Expression::BinaryOp {
+                                left: Box::new(Expression::Index { object: object.clone(), index: index.clone() }),
+                                op: "+".to_string(),
+                                right: Box::new(Expression::Literal(Literal::Integer(1)))
+                            })
+                        }
+                    }
+                    _ => operand,
+                }
+            }
+            TokenKind::MinusMinus => {
+                self.next_token();
+                let operand = self.parse_primary();
+                match operand {
+                    Expression::Identifier(name) => {
+                        Expression::Assign {
+                            name: name.clone(),
+                            value: Box::new(Expression::BinaryOp {
+                                left: Box::new(Expression::Identifier(name)),
+                                op: "-".to_string(),
+                                right: Box::new(Expression::Literal(Literal::Integer(1)))
+                            })
+                        }
+                    }
+                    Expression::PropertyAccess { object, property } => {
+                        Expression::PropertyAssign {
+                            object: object.clone(),
+                            property: property.clone(),
+                            value: Box::new(Expression::BinaryOp {
+                                left: Box::new(Expression::PropertyAccess { object: object.clone(), property: property.clone() }),
+                                op: "-".to_string(),
+                                right: Box::new(Expression::Literal(Literal::Integer(1)))
+                            })
+                        }
+                    }
+                    Expression::Index { object, index } => {
+                        Expression::IndexAssign {
+                            object: object.clone(),
+                            index: index.clone(),
+                            value: Box::new(Expression::BinaryOp {
+                                left: Box::new(Expression::Index { object: object.clone(), index: index.clone() }),
+                                op: "-".to_string(),
+                                right: Box::new(Expression::Literal(Literal::Integer(1)))
+                            })
+                        }
+                    }
+                    _ => operand,
+                }
+            }
             TokenKind::Bang => {
                 self.next_token();
                 let operand = self.parse_primary();
@@ -663,19 +817,107 @@ impl<'a> Parser<'a> {
         let has_paren = self.cur_token.kind == TokenKind::LParen;
         if has_paren { self.next_token(); }
 
-        let var_name = if let TokenKind::Identifier(id) = &self.cur_token.kind {
-            id.clone()
-        } else { return None; };
-        self.next_token();
+        // Determine if standard for-in loop by checking if the next token is 'in' after the identifier
+        let is_for_in = if let TokenKind::Identifier(_) = &self.cur_token.kind {
+            self.peek_token.kind == TokenKind::In
+        } else {
+            false
+        };
 
-        if self.cur_token.kind != TokenKind::In { return None; }
-        self.next_token(); // skip 'in'
+        if is_for_in {
+            let var_name = if let TokenKind::Identifier(id) = &self.cur_token.kind {
+                id.clone()
+            } else { return None; };
+            self.next_token();
+            self.next_token(); // skip 'in'
 
-        let iterable = self.parse_expression(0);
-        if has_paren && self.cur_token.kind == TokenKind::RParen { self.next_token(); }
-        self.skip_newlines();
-        let body = self.parse_block();
-        Some(Statement::For { var_name, iterable, body })
+            let iterable = self.parse_expression(0);
+            if has_paren && self.cur_token.kind == TokenKind::RParen { self.next_token(); }
+            self.skip_newlines();
+            let body = self.parse_block();
+            Some(Statement::For { var_name, iterable, body })
+        } else {
+            // C-style loop: for (init; cond; step) or for (init, cond, step)
+            let init = if matches!(self.cur_token.kind, TokenKind::Let | TokenKind::Var | TokenKind::Const) {
+                self.parse_let_statement()
+            } else {
+                let expr = self.parse_expression(0);
+                Some(Statement::Expression(expr))
+            };
+
+            // Skip separator (semicolon or comma)
+            if self.cur_token.kind == TokenKind::Semicolon || self.cur_token.kind == TokenKind::Comma {
+                self.next_token();
+            }
+
+            // Parse condition
+            let cond = self.parse_expression(0);
+
+            // Skip separator
+            if self.cur_token.kind == TokenKind::Semicolon || self.cur_token.kind == TokenKind::Comma {
+                self.next_token();
+            }
+
+            // Parse step
+            let step_expr = self.parse_expression(0);
+            let step = Statement::Expression(step_expr);
+
+            // Skip closing parenthesis if open parenthesis was used
+            if has_paren && self.cur_token.kind == TokenKind::RParen {
+                self.next_token();
+            }
+
+            self.skip_newlines();
+
+            // Parse body block
+            let mut body = self.parse_block();
+
+            // Setup continue rewriter helper to recursively prepend step to continue statements
+            fn rewrite_continues(stmts: &mut Vec<Statement>, step: &Statement) {
+                let mut i = 0;
+                while i < stmts.len() {
+                    match &mut stmts[i] {
+                        Statement::Continue => {
+                            stmts.insert(i, step.clone());
+                            i += 2;
+                            continue;
+                        }
+                        Statement::If { then_body, else_body, .. } => {
+                            rewrite_continues(then_body, step);
+                            if let Some(eb) = else_body {
+                                rewrite_continues(eb, step);
+                            }
+                        }
+                        Statement::TryCatch { try_body, catch_body, .. } => {
+                            rewrite_continues(try_body, step);
+                            rewrite_continues(catch_body, step);
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+            }
+
+            // Rewrite continue statements in loop body
+            rewrite_continues(&mut body, &step);
+
+            // Append step to body block
+            body.push(step);
+
+            // Desugar to: if true { init; while cond { body } }
+            let while_loop = Statement::While { condition: cond, body };
+            let mut wrapper_body = Vec::new();
+            if let Some(i_stmt) = init {
+                wrapper_body.push(i_stmt);
+            }
+            wrapper_body.push(while_loop);
+
+            Some(Statement::If {
+                condition: Expression::Literal(Literal::Bool(true)),
+                then_body: wrapper_body,
+                else_body: None,
+            })
+        }
     }
 
     fn parse_if(&mut self) -> Option<Statement> {
