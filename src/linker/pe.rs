@@ -394,10 +394,34 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
             let reloc_rva = sec_rva + offset_in_merged as u32;
             let addend = reloc.addend();
 
+            let size = reloc.size();
+            let implicit_disp = if size == 32 {
+                if offset_in_merged + 4 <= merged_buf.len() {
+                    i32::from_le_bytes(
+                        merged_buf[offset_in_merged..offset_in_merged + 4]
+                            .try_into()
+                            .unwrap()
+                    ) as i64
+                } else {
+                    0
+                }
+            } else if size == 64 {
+                if offset_in_merged + 8 <= merged_buf.len() {
+                    i64::from_le_bytes(
+                        merged_buf[offset_in_merged..offset_in_merged + 8]
+                            .try_into()
+                            .unwrap()
+                    )
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
             match reloc.kind() {
                 object::RelocationKind::Relative => {
-                    let size = reloc.size();
-                    let rel_val = target_rva as i64 - reloc_rva as i64 + addend;
+                    let rel_val = target_rva as i64 - reloc_rva as i64 + addend + implicit_disp;
                     if size == 32 {
                         merged_buf[offset_in_merged..offset_in_merged+4].copy_from_slice(&(rel_val as i32).to_le_bytes());
                     } else if size == 64 {
@@ -405,8 +429,7 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
                     }
                 }
                 object::RelocationKind::Absolute => {
-                    let size = reloc.size();
-                    let abs_val = target_rva as i64 + IMAGE_BASE as i64 + addend;
+                    let abs_val = target_rva as i64 + IMAGE_BASE as i64 + addend + implicit_disp;
                     if size == 32 {
                         merged_buf[offset_in_merged..offset_in_merged+4].copy_from_slice(&(abs_val as i32).to_le_bytes());
                     } else if size == 64 {
@@ -414,8 +437,7 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
                     }
                 }
                 object::RelocationKind::ImageOffset => {
-                    let size = reloc.size();
-                    let rva_val = target_rva as i64 + addend;
+                    let rva_val = target_rva as i64 + addend + implicit_disp;
                     if size == 32 {
                         merged_buf[offset_in_merged..offset_in_merged+4].copy_from_slice(&(rva_val as i32).to_le_bytes());
                     } else if size == 64 {

@@ -36,13 +36,25 @@ pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
 }
 
 const MAX_THREADS: usize = 16;
-const HEAP_SIZE: usize = 128 * 1024 * 1024; // 128 MB per thread
+const MAX_SEGMENTS_PER_THREAD: usize = 64;
+const DEFAULT_SEGMENT_SIZE: usize = 16 * 1024 * 1024; // 16 MB initial segment size to save memory
 const MAX_BIGINT_LIMBS: usize = 1000;
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct HeapSegment {
+    start: *mut u8,
+    bump: usize,
+    limit: usize,
+}
+
 static mut G_THREAD_IDS: [u64; MAX_THREADS] = [0; MAX_THREADS];
-static mut G_HEAP_STARTS: [*mut u8; MAX_THREADS] = [core::ptr::null_mut(); MAX_THREADS];
-static mut G_HEAP_BUMPS: [usize; MAX_THREADS] = [0; MAX_THREADS];
-static mut G_HEAP_LIMITS: [usize; MAX_THREADS] = [0; MAX_THREADS];
+static mut G_HEAP_SEGMENTS: [HeapSegment; MAX_THREADS * MAX_SEGMENTS_PER_THREAD] = [HeapSegment {
+    start: core::ptr::null_mut(),
+    bump: 0,
+    limit: 0,
+}; MAX_THREADS * MAX_SEGMENTS_PER_THREAD];
+static mut G_HEAP_SEGMENT_COUNTS: [usize; MAX_THREADS] = [0; MAX_THREADS];
 static mut G_STACK_BASES: [*mut u8; MAX_THREADS] = [core::ptr::null_mut(); MAX_THREADS];
 static mut G_VERBOSE: bool = false;
 
@@ -192,11 +204,36 @@ pub unsafe extern "C" fn vajra_print_str(s: *const u8) {
 
 unsafe fn is_heap_ptr(val: u64) -> bool {
     let ptr = val as *mut u8;
+    let base_ptr = G_HEAP_SEGMENTS.as_ptr();
     for i in 0..MAX_THREADS {
-        let start = G_HEAP_STARTS[i];
-        let bump = G_HEAP_BUMPS[i];
-        if !start.is_null() && ptr >= start && ptr < start.add(bump) {
-            return true;
+        let count = *G_HEAP_SEGMENT_COUNTS.as_ptr().add(i);
+        if G_VERBOSE && count > 0 {
+            print_raw(b"DBG is_heap_ptr: base_ptr=\0".as_ptr(), 27);
+            print_i64_nn(base_ptr as usize as i64);
+            print_raw(b" thread=\0".as_ptr(), 9);
+            print_i64_nn(i as i64);
+            print_raw(b" count=\0".as_ptr(), 7);
+            print_i64_nn(count as i64);
+            print_raw(EOL.as_ptr(), EOL.len());
+        }
+        for s in 0..count {
+            let seg = base_ptr.add(i * MAX_SEGMENTS_PER_THREAD + s);
+            let start = (*seg).start;
+            let limit = (*seg).limit;
+            if G_VERBOSE {
+                print_raw(b"DBG is_heap_ptr: seg=\0".as_ptr(), 21);
+                print_i64_nn(s as i64);
+                print_raw(b" start=\0".as_ptr(), 8);
+                print_i64_nn(start as usize as i64);
+                print_raw(b" limit=\0".as_ptr(), 8);
+                print_i64_nn(limit as i64);
+                print_raw(b" ptr=\0".as_ptr(), 6);
+                print_i64_nn(ptr as usize as i64);
+                print_raw(EOL.as_ptr(), EOL.len());
+            }
+            if !start.is_null() && ptr >= start && ptr < start.add(limit) {
+                return true;
+            }
         }
     }
     false
@@ -313,6 +350,52 @@ pub unsafe extern "C" fn vajra_readline() -> *mut u8 {
 }
 
 #[no_mangle]
+unsafe fn allocate_new_segment(idx: usize, size: usize) -> bool {
+    let count = *G_HEAP_SEGMENT_COUNTS.as_ptr().add(idx);
+    if count >= MAX_SEGMENTS_PER_THREAD {
+        return false;
+    }
+    let segment_size = if size > DEFAULT_SEGMENT_SIZE {
+        size
+    } else {
+        DEFAULT_SEGMENT_SIZE
+    };
+    extern "C" {
+        fn platform_alloc(size: usize) -> *mut u8;
+    }
+    let ptr = platform_alloc(segment_size);
+    if ptr.is_null() {
+        return false;
+    }
+    if G_VERBOSE {
+        print_raw(b"DBG allocate_new_segment: idx=\0".as_ptr(), 30);
+        print_i64_nn(idx as i64);
+        print_raw(b" count=\0".as_ptr(), 7);
+        print_i64_nn(count as i64);
+        print_raw(b" ptr=\0".as_ptr(), 5);
+        print_i64_nn(ptr as usize as i64);
+        print_raw(b" size=\0".as_ptr(), 6);
+        print_i64_nn(segment_size as i64);
+        print_raw(EOL.as_ptr(), EOL.len());
+    }
+    let seg_ptr = G_HEAP_SEGMENTS.as_mut_ptr().add(idx * MAX_SEGMENTS_PER_THREAD + count);
+    (*seg_ptr).start = ptr;
+    (*seg_ptr).bump = 0;
+    (*seg_ptr).limit = segment_size;
+    if G_VERBOSE {
+        print_raw(b"DBG allocate_new_segment written: seg_ptr=\0".as_ptr(), 41);
+        print_i64_nn(seg_ptr as usize as i64);
+        print_raw(b" start=\0".as_ptr(), 7);
+        print_i64_nn((*seg_ptr).start as usize as i64);
+        print_raw(b" limit=\0".as_ptr(), 7);
+        print_i64_nn((*seg_ptr).limit as i64);
+        print_raw(EOL.as_ptr(), EOL.len());
+    }
+    *G_HEAP_SEGMENT_COUNTS.as_mut_ptr().add(idx) = count + 1;
+    true
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn vajra_alloc(size: usize) -> *mut u8 {
     if G_VERBOSE {
         print_raw(b"DBG: vajra_alloc size=\0".as_ptr(), 22);
@@ -326,37 +409,66 @@ pub unsafe extern "C" fn vajra_alloc(size: usize) -> *mut u8 {
     let Some(total_size) = size.checked_add(8) else {
         vajra_throw(b"Allocation size overflow\0".as_ptr());
     };
-    if total_size > HEAP_SIZE {
-        vajra_throw(b"Allocation exceeds heap limit\0".as_ptr());
-    }
 
     let idx = get_thread_idx();
-    let bump = *G_HEAP_BUMPS.as_ptr().add(idx);
-    let limit = *G_HEAP_LIMITS.as_ptr().add(idx);
-    let start = *G_HEAP_STARTS.as_ptr().add(idx);
-
-    if start.is_null() {
-        vajra_throw(b"Heap allocation failure\0".as_ptr());
+    
+    // Lazily initialize first segment if count is 0
+    if *G_HEAP_SEGMENT_COUNTS.as_ptr().add(idx) == 0 {
+        if !allocate_new_segment(idx, total_size) {
+            vajra_throw(b"Heap allocation failure\0".as_ptr());
+        }
     }
 
-    if bump + total_size <= limit {
-        let ptr = start.add(bump);
-        let header = ptr as *mut AllocHeader;
-        (*header).size = size as u32;
-        (*header).marked = 0;
-        *G_HEAP_BUMPS.as_mut_ptr().add(idx) = bump + total_size;
-        return ptr.add(8);
+    let mut seg_count = *G_HEAP_SEGMENT_COUNTS.as_ptr().add(idx);
+    let base_ptr = G_HEAP_SEGMENTS.as_mut_ptr();
+    
+    // 1. Try to allocate in any existing segment
+    for s_idx in 0..seg_count {
+        let seg = base_ptr.add(idx * MAX_SEGMENTS_PER_THREAD + s_idx);
+        let start = (*seg).start;
+        let bump = (*seg).bump;
+        let limit = (*seg).limit;
+        if bump + total_size <= limit {
+            let ptr = start.add(bump);
+            let header = ptr as *mut AllocHeader;
+            (*header).size = size as u32;
+            (*header).marked = 0;
+            (*seg).bump = bump + total_size;
+            return ptr.add(8);
+        }
     }
 
+    // 2. Perform GC to reclaim space in all segments
     gc_collect(idx);
 
-    let bump = *G_HEAP_BUMPS.as_ptr().add(idx);
-    if bump + total_size <= limit {
+    // 3. Try to allocate in any existing segment again after GC
+    seg_count = *G_HEAP_SEGMENT_COUNTS.as_ptr().add(idx);
+    for s_idx in 0..seg_count {
+        let seg = base_ptr.add(idx * MAX_SEGMENTS_PER_THREAD + s_idx);
+        let start = (*seg).start;
+        let bump = (*seg).bump;
+        let limit = (*seg).limit;
+        if bump + total_size <= limit {
+            let ptr = start.add(bump);
+            let header = ptr as *mut AllocHeader;
+            (*header).size = size as u32;
+            (*header).marked = 0;
+            (*seg).bump = bump + total_size;
+            return ptr.add(8);
+        }
+    }
+
+    // 4. No existing segment has space, so dynamically allocate a new segment!
+    if allocate_new_segment(idx, total_size) {
+        let new_seg_idx = *G_HEAP_SEGMENT_COUNTS.as_ptr().add(idx) - 1;
+        let seg = base_ptr.add(idx * MAX_SEGMENTS_PER_THREAD + new_seg_idx);
+        let start = (*seg).start;
+        let bump = (*seg).bump;
         let ptr = start.add(bump);
         let header = ptr as *mut AllocHeader;
         (*header).size = size as u32;
         (*header).marked = 0;
-        *G_HEAP_BUMPS.as_mut_ptr().add(idx) = bump + total_size;
+        (*seg).bump = bump + total_size;
         return ptr.add(8);
     }
 
@@ -369,38 +481,51 @@ pub unsafe extern "C" fn vajra_free(_ptr: *mut u8) {
 }
 
 unsafe fn mark_block(idx: usize, ptr: *mut u8) -> bool {
-    let heap_start = *G_HEAP_STARTS.as_ptr().add(idx);
-    let heap_bump = *G_HEAP_BUMPS.as_ptr().add(idx);
+    let count = *G_HEAP_SEGMENT_COUNTS.as_ptr().add(idx);
+    let base_ptr = G_HEAP_SEGMENTS.as_ptr();
+    for s in 0..count {
+        let seg = base_ptr.add(idx * MAX_SEGMENTS_PER_THREAD + s);
+        let start = (*seg).start;
+        let bump = (*seg).bump;
+        let limit = (*seg).limit;
+        if !start.is_null() && ptr >= start && ptr < start.add(limit) {
+            // Find the exact block in this segment
+            let mut offset = 0;
+            while offset < bump {
+                let header = start.add(offset) as *mut AllocHeader;
+                let block_size = (*header).size as usize;
+                let block_start = start.add(offset + 8);
+                let block_end = block_start.add(block_size);
 
-    let mut offset = 0;
-    while offset < heap_bump {
-        let header = heap_start.add(offset) as *mut AllocHeader;
-        let block_size = (*header).size as usize;
-        let block_start = heap_start.add(offset + 8);
-        let block_end = block_start.add(block_size);
-
-        if ptr >= block_start && ptr < block_end {
-            if (*header).marked == 0 {
-                (*header).marked = 1;
-                return true;
+                if ptr >= block_start && ptr < block_end {
+                    if (*header).marked == 0 {
+                        (*header).marked = 1;
+                        return true;
+                    }
+                    return false;
+                }
+                offset += block_size + 8;
             }
-            return false;
         }
-        offset += block_size + 8;
     }
     false
 }
 
 unsafe fn gc_collect(idx: usize) {
-    let heap_start = *G_HEAP_STARTS.as_ptr().add(idx);
-    let heap_bump = *G_HEAP_BUMPS.as_ptr().add(idx);
+    let count = *G_HEAP_SEGMENT_COUNTS.as_ptr().add(idx);
+    let base_ptr = G_HEAP_SEGMENTS.as_mut_ptr();
 
-    // 1. Clear marks
-    let mut offset = 0;
-    while offset < heap_bump {
-        let header = heap_start.add(offset) as *mut AllocHeader;
-        (*header).marked = 0;
-        offset += (*header).size as usize + 8;
+    // 1. Clear marks across all segments
+    for s in 0..count {
+        let seg = base_ptr.add(idx * MAX_SEGMENTS_PER_THREAD + s);
+        let start = (*seg).start;
+        let bump = (*seg).bump;
+        let mut offset = 0;
+        while offset < bump {
+            let header = start.add(offset) as *mut AllocHeader;
+            (*header).marked = 0;
+            offset += (*header).size as usize + 8;
+        }
     }
 
     // Spill non-volatile registers to stack before scanning
@@ -428,9 +553,7 @@ unsafe fn gc_collect(idx: usize) {
         while cur < stack_base {
             let val = *cur;
             let ptr_val = val as *mut u8;
-            if ptr_val >= heap_start && ptr_val < heap_start.add(heap_bump) {
-                mark_block(idx, ptr_val);
-            }
+            mark_block(idx, ptr_val);
             cur = cur.add(1);
         }
     }
@@ -439,40 +562,47 @@ unsafe fn gc_collect(idx: usize) {
     let mut changed = true;
     while changed {
         changed = false;
-        let mut offset = 0;
-        while offset < heap_bump {
-            let header = heap_start.add(offset) as *mut AllocHeader;
-            if (*header).marked == 1 {
-                let size = (*header).size as usize;
-                let payload = heap_start.add(offset + 8) as *mut usize;
-                let num_words = size / 8;
-                for i in 0..num_words {
-                    let val = *payload.add(i);
-                    let ptr_val = val as *mut u8;
-                    if ptr_val >= heap_start && ptr_val < heap_start.add(heap_bump) {
+        for s in 0..count {
+            let seg = base_ptr.add(idx * MAX_SEGMENTS_PER_THREAD + s);
+            let start = (*seg).start;
+            let bump = (*seg).bump;
+            let mut offset = 0;
+            while offset < bump {
+                let header = start.add(offset) as *mut AllocHeader;
+                if (*header).marked == 1 {
+                    let size = (*header).size as usize;
+                    let payload = start.add(offset + 8) as *mut usize;
+                    let num_words = size / 8;
+                    for i in 0..num_words {
+                        let val = *payload.add(i);
+                        let ptr_val = val as *mut u8;
                         if mark_block(idx, ptr_val) {
                             changed = true;
                         }
                     }
                 }
+                offset += (*header).size as usize + 8;
             }
-            offset += (*header).size as usize + 8;
         }
     }
 
     // 4. Sweep (high-watermark)
-    let mut max_live_end = 0;
-    let mut offset = 0;
-    while offset < heap_bump {
-        let header = heap_start.add(offset) as *mut AllocHeader;
-        let block_size = (*header).size as usize + 8;
-        if (*header).marked == 1 {
-            max_live_end = offset + block_size;
+    for s in 0..count {
+        let seg = base_ptr.add(idx * MAX_SEGMENTS_PER_THREAD + s);
+        let start = (*seg).start;
+        let bump = (*seg).bump;
+        let mut max_live_end = 0;
+        let mut offset = 0;
+        while offset < bump {
+            let header = start.add(offset) as *mut AllocHeader;
+            let block_size = (*header).size as usize + 8;
+            if (*header).marked == 1 {
+                max_live_end = offset + block_size;
+            }
+            offset += block_size;
         }
-        offset += block_size;
+        (*seg).bump = max_live_end;
     }
-
-    *G_HEAP_BUMPS.as_mut_ptr().add(idx) = max_live_end;
 }
 
 struct ThreadArg {
@@ -1038,6 +1168,11 @@ pub unsafe extern "C" fn vajra_rem(a: u64, b: u64) -> u64 {
 }
 
 unsafe fn is_valid_bigint(val: u64) -> bool {
+    if G_VERBOSE {
+        print_raw(b"DBG: is_valid_bigint val=\0".as_ptr(), 26);
+        print_i64_nn(val as i64);
+        print_raw(EOL.as_ptr(), EOL.len());
+    }
     if !is_heap_ptr(val) {
         return false;
     }
@@ -1053,6 +1188,11 @@ unsafe fn is_valid_bigint(val: u64) -> bool {
 }
 
 unsafe fn get_string_ptr(val: u64) -> *const u8 {
+    if G_VERBOSE {
+        print_raw(b"DBG: get_string_ptr val=\0".as_ptr(), 25);
+        print_i64_nn(val as i64);
+        print_raw(EOL.as_ptr(), EOL.len());
+    }
     if val == 0 {
         return core::ptr::null();
     }
@@ -1071,6 +1211,13 @@ unsafe fn get_string_ptr(val: u64) -> *const u8 {
 
 #[no_mangle]
 pub unsafe extern "C" fn vajra_cmp(a: u64, b: u64) -> i64 {
+    if G_VERBOSE {
+        print_raw(b"DBG: vajra_cmp a=\0".as_ptr(), 18);
+        print_i64_nn(a as i64);
+        print_raw(b" b=\0".as_ptr(), 4);
+        print_i64_nn(b as i64);
+        print_raw(EOL.as_ptr(), EOL.len());
+    }
     if a == b {
         return 0;
     }

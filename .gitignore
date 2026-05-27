@@ -41,3 +41,4 @@ test_*
 !runtime_win.o
 tested_resul.txt
 ir_output.txt
+*.txt

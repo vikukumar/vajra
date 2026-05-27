@@ -83,6 +83,21 @@ unsafe fn get_stack_base() -> *mut u8 {
     stack_base
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn platform_alloc(size: usize) -> *mut u8 {
+    let ptr = VirtualAlloc(
+        core::ptr::null_mut(),
+        size,
+        0x3000, // MEM_COMMIT | MEM_RESERVE
+        0x04,   // PAGE_READWRITE
+    );
+    if ptr.is_null() {
+        core::ptr::null_mut()
+    } else {
+        ptr as *mut u8
+    }
+}
+
 unsafe fn get_thread_idx() -> usize {
     let tid = get_thread_id();
     for i in 0..MAX_THREADS {
@@ -98,18 +113,6 @@ unsafe fn get_thread_idx() -> usize {
         let ptr = G_THREAD_IDS.as_mut_ptr().add(i) as *mut AtomicU64;
         if (*ptr).compare_exchange(0, tid, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             *G_STACK_BASES.as_mut_ptr().add(i) = get_stack_base();
-            let heap = VirtualAlloc(
-                core::ptr::null_mut(),
-                HEAP_SIZE,
-                0x3000, // MEM_COMMIT | MEM_RESERVE
-                0x04,   // PAGE_READWRITE
-            );
-            if allocation_failed(heap) {
-                continue;
-            }
-            *G_HEAP_STARTS.as_mut_ptr().add(i) = heap as *mut u8;
-            *G_HEAP_LIMITS.as_mut_ptr().add(i) = HEAP_SIZE;
-            *G_HEAP_BUMPS.as_mut_ptr().add(i) = 0;
             return i;
         }
         if (*ptr).load(Ordering::SeqCst) == tid {
@@ -187,18 +190,6 @@ pub unsafe extern "C" fn vajra_runtime_init() {
     *G_THREAD_IDS.as_mut_ptr().add(0) = tid;
     *G_STACK_BASES.as_mut_ptr().add(0) = get_stack_base();
     
-    let heap = VirtualAlloc(
-        core::ptr::null_mut(),
-        HEAP_SIZE,
-        0x3000, // MEM_COMMIT | MEM_RESERVE
-        0x04,   // PAGE_READWRITE
-    );
-    if allocation_failed(heap) {
-        vajra_throw(b"Heap allocation failure\0".as_ptr());
-    }
-    *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
-    *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
-    *G_HEAP_BUMPS.as_mut_ptr().add(0) = 0;
     if G_VERBOSE {
         print_raw(b"DBG: vajra_runtime_init finished\n\0".as_ptr(), 34);
     }

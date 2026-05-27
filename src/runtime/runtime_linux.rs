@@ -147,6 +147,23 @@ unsafe fn get_stack_base() -> *mut u8 {
     core::ptr::null_mut()
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn platform_alloc(size: usize) -> *mut u8 {
+    let ptr = sys_mmap(
+        core::ptr::null_mut(),
+        size,
+        0x03,  // PROT_READ | PROT_WRITE
+        0x22,  // MAP_PRIVATE | MAP_ANONYMOUS
+        -1,
+        0,
+    );
+    if ptr as isize == -1 {
+        core::ptr::null_mut()
+    } else {
+        ptr as *mut u8
+    }
+}
+
 unsafe fn get_thread_idx() -> usize {
     let tid = get_thread_id();
     for i in 0..MAX_THREADS {
@@ -162,20 +179,6 @@ unsafe fn get_thread_idx() -> usize {
         let ptr = G_THREAD_IDS.as_mut_ptr().add(i) as *mut AtomicU64;
         if (*ptr).compare_exchange(0, tid, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             *G_STACK_BASES.as_mut_ptr().add(i) = get_stack_base();
-            let heap = sys_mmap(
-                core::ptr::null_mut(),
-                HEAP_SIZE,
-                0x03,  // PROT_READ | PROT_WRITE = 0x3
-                0x22,  // MAP_PRIVATE | MAP_ANONYMOUS = 0x22
-                -1,
-                0,
-            );
-            if allocation_failed(heap) {
-                continue;
-            }
-            *G_HEAP_STARTS.as_mut_ptr().add(i) = heap as *mut u8;
-            *G_HEAP_LIMITS.as_mut_ptr().add(i) = HEAP_SIZE;
-            *G_HEAP_BUMPS.as_mut_ptr().add(i) = 0;
             return i;
         }
     }
@@ -237,20 +240,6 @@ pub unsafe extern "C" fn vajra_runtime_init() {
     *G_THREAD_IDS.as_mut_ptr().add(0) = tid;
     *G_STACK_BASES.as_mut_ptr().add(0) = get_stack_base();
     
-    let heap = sys_mmap(
-        core::ptr::null_mut(),
-        HEAP_SIZE,
-        0x03,  // PROT_READ | PROT_WRITE
-        0x22,  // MAP_PRIVATE | MAP_ANONYMOUS
-        -1,
-        0,
-    );
-    if allocation_failed(heap) {
-        vajra_throw(b"Heap allocation failure\0".as_ptr());
-    }
-    *G_HEAP_STARTS.as_mut_ptr().add(0) = heap as *mut u8;
-    *G_HEAP_LIMITS.as_mut_ptr().add(0) = HEAP_SIZE;
-    *G_HEAP_BUMPS.as_mut_ptr().add(0) = 0;
     if G_VERBOSE {
         print_raw(b"DBG: vajra_runtime_init finished\n\0".as_ptr(), 34);
     }
