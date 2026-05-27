@@ -146,11 +146,13 @@ fn align16(n: u32) -> u32 {
     (n + 15) & !15
 }
 
-fn get_arg_regs() -> &'static [Reg] {
-    #[cfg(target_os = "windows")]
-    { &[Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9] }
-    #[cfg(not(target_os = "windows"))]
-    { &[Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9] }
+fn get_arg_regs(platform: &TargetPlatform) -> &'static [Reg] {
+    match platform {
+        TargetPlatform::WindowsX64 => &[Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9],
+        TargetPlatform::LinuxX64 | TargetPlatform::MacOsX64 => {
+            &[Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9]
+        }
+    }
 }
 
 // ─── Value Location ───────────────────────────────────────────────────────────
@@ -354,18 +356,23 @@ fn analyze_and_assign_regs(func: &IrFunction) -> std::collections::HashMap<ValId
 // ─── Codegen ─────────────────────────────────────────────────────────────────
 
 pub fn compile(module: &IrModule, platform: &TargetPlatform) -> Result<Vec<u8>> {
-    let mut gen = X86_64Codegen::new(module);
-    gen.compile_module(platform)
+    let mut gen = X86_64Codegen::new(module, platform.clone());
+    gen.compile_module()
 }
 
 struct X86_64Codegen<'m> {
     module: &'m IrModule,
     global_offsets: HashMap<String, u64>,
+    platform: TargetPlatform,
 }
 
 impl<'m> X86_64Codegen<'m> {
-    pub fn new(module: &'m IrModule) -> Self {
-        Self { module, global_offsets: HashMap::new() }
+    pub fn new(module: &'m IrModule, platform: TargetPlatform) -> Self {
+        Self {
+            module,
+            global_offsets: HashMap::new(),
+            platform,
+        }
     }
 
     fn is_float_returning(&self, name: &str) -> bool {
@@ -395,8 +402,8 @@ impl<'m> X86_64Codegen<'m> {
         Ok(())
     }
 
-    pub fn compile_module(&mut self, platform: &TargetPlatform) -> Result<Vec<u8>> {
-        let (binary_format, arch) = match platform {
+    pub fn compile_module(&mut self) -> Result<Vec<u8>> {
+        let (binary_format, arch) = match &self.platform {
             TargetPlatform::WindowsX64 => (BinaryFormat::Coff, Architecture::X86_64),
             TargetPlatform::LinuxX64 => (BinaryFormat::Elf, Architecture::X86_64),
             TargetPlatform::MacOsX64 => (BinaryFormat::Elf, Architecture::X86_64), // Using ELF for macOS fallback
@@ -566,7 +573,7 @@ impl<'m> X86_64Codegen<'m> {
         }
 
         // Map parameters to argument registers
-        let arg_regs = get_arg_regs();
+        let arg_regs = get_arg_regs(&self.platform);
         for (i, param) in func.params.iter().enumerate() {
             if i < arg_regs.len() {
                 let off = fg.alloc_stack(8);
@@ -685,18 +692,20 @@ impl<'m> X86_64Codegen<'m> {
             IrInstr::Div(dst, a, b) => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_div")?; }
             IrInstr::Rem(dst, a, b) => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_rem")?; }
             IrInstr::Neg(dst, a) => {
-                let arg_regs = get_arg_regs();
+                let arg_regs = get_arg_regs(&self.platform);
                 emit_mov_imm64(&mut fg.code, arg_regs[0], 1); // tagged 0
                 self.load_into(fg, *a, arg_regs[1])?;
                 fg.clear_cache();
-                #[cfg(target_os = "windows")]
-                fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+                if self.platform == TargetPlatform::WindowsX64 {
+                    fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+                }
                 fg.code.push(0xE8);
                 let patch = fg.pos();
                 fg.code.extend_from_slice(&[0; 4]);
                 fg.relocs.push(PendingReloc { offset: patch as u64, symbol: "vajra_sub".to_string(), addend: -4 });
-                #[cfg(target_os = "windows")]
-                fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                if self.platform == TargetPlatform::WindowsX64 {
+                    fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                }
                 
                 fg.invalidate_reg(Reg::Rax);
                 if fg.non_spillable.contains(dst) {
@@ -713,18 +722,20 @@ impl<'m> X86_64Codegen<'m> {
             IrInstr::FMul(dst, a, b) => { self.fop(fg, *dst, *a, *b, &[0xF2, 0x0F, 0x59, 0xC1])?; }
             IrInstr::FDiv(dst, a, b) => { self.fop(fg, *dst, *a, *b, &[0xF2, 0x0F, 0x5E, 0xC1])?; }
             IrInstr::Cmp(dst, op, a, b) => {
-                let arg_regs = get_arg_regs();
+                let arg_regs = get_arg_regs(&self.platform);
                 self.load_into(fg, *a, arg_regs[0])?;
                 self.load_into(fg, *b, arg_regs[1])?;
                 fg.clear_cache();
-                #[cfg(target_os = "windows")]
-                fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+                if self.platform == TargetPlatform::WindowsX64 {
+                    fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+                }
                 fg.code.push(0xE8);
                 let patch = fg.pos();
                 fg.code.extend_from_slice(&[0; 4]);
                 fg.relocs.push(PendingReloc { offset: patch as u64, symbol: "vajra_cmp".to_string(), addend: -4 });
-                #[cfg(target_os = "windows")]
-                fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                if self.platform == TargetPlatform::WindowsX64 {
+                    fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                }
                 
                 fg.code.extend_from_slice(&[0x48, 0x83, 0xF8, 0x00]); // cmp rax, 0
                 let setcc: u8 = match op {
@@ -749,17 +760,19 @@ impl<'m> X86_64Codegen<'m> {
             IrInstr::And(dst, a, b) => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_and")?; }
             IrInstr::Or(dst, a, b)  => { self.call_binary_helper(fg, *dst, *a, *b, "vajra_or")?; }
             IrInstr::Not(dst, a) => {
-                let arg_regs = get_arg_regs();
+                let arg_regs = get_arg_regs(&self.platform);
                 self.load_into(fg, *a, arg_regs[0])?;
                 fg.clear_cache();
-                #[cfg(target_os = "windows")]
-                fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+                if self.platform == TargetPlatform::WindowsX64 {
+                    fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+                }
                 fg.code.push(0xE8);
                 let patch = fg.pos();
                 fg.code.extend_from_slice(&[0; 4]);
                 fg.relocs.push(PendingReloc { offset: patch as u64, symbol: "vajra_not".to_string(), addend: -4 });
-                #[cfg(target_os = "windows")]
-                fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                if self.platform == TargetPlatform::WindowsX64 {
+                    fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                }
                 
                 fg.invalidate_reg(Reg::Rax);
                 if fg.non_spillable.contains(dst) {
@@ -792,7 +805,7 @@ impl<'m> X86_64Codegen<'m> {
                         self.load_f64_into(fg, args[0], Reg::Xmm0)?;
                     }
                 } else {
-                    let arg_regs = get_arg_regs();
+                    let arg_regs = get_arg_regs(&self.platform);
                     for (i, &arg_id) in args.iter().enumerate() {
                         if i < arg_regs.len() {
                             self.load_into(fg, arg_id, arg_regs[i])?;
@@ -801,14 +814,16 @@ impl<'m> X86_64Codegen<'m> {
                 }
                 
                 fg.clear_cache();
-                #[cfg(target_os = "windows")]
-                fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32 (shadow space)
+                if self.platform == TargetPlatform::WindowsX64 {
+                    fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32 (shadow space)
+                }
                 fg.code.push(0xE8);
                 let patch = fg.pos();
                 fg.code.extend_from_slice(&[0; 4]);
                 fg.relocs.push(PendingReloc { offset: patch as u64, symbol: name.clone(), addend: -4 });
-                #[cfg(target_os = "windows")]
-                fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                if self.platform == TargetPlatform::WindowsX64 {
+                    fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+                }
                 
                 let off = fg.alloc_stack(8);
                 if is_float_ret {
@@ -891,7 +906,7 @@ impl<'m> X86_64Codegen<'m> {
                 fg.set_reg(Reg::Rax, *dst);
             }
             IrInstr::CallIndirect(dst, func_ptr, args) => {
-                let arg_regs = get_arg_regs();
+                let arg_regs = get_arg_regs(&self.platform);
                 for (i, &arg) in args.iter().enumerate() {
                     if i < arg_regs.len() { self.load_into(fg, arg, arg_regs[i])?; }
                 }
@@ -910,18 +925,20 @@ impl<'m> X86_64Codegen<'m> {
     }
 
     fn call_binary_helper(&self, fg: &mut FuncGen, dst: ValId, a: ValId, b: ValId, name: &str) -> Result<()> {
-        let arg_regs = get_arg_regs();
+        let arg_regs = get_arg_regs(&self.platform);
         self.load_into(fg, a, arg_regs[0])?;
         self.load_into(fg, b, arg_regs[1])?;
         fg.clear_cache();
-        #[cfg(target_os = "windows")]
-        fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+        if self.platform == TargetPlatform::WindowsX64 {
+            fg.code.extend_from_slice(&[0x48, 0x83, 0xEC, 0x20]); // sub rsp, 32
+        }
         fg.code.push(0xE8);
         let patch = fg.pos();
         fg.code.extend_from_slice(&[0; 4]);
         fg.relocs.push(PendingReloc { offset: patch as u64, symbol: name.to_string(), addend: -4 });
-        #[cfg(target_os = "windows")]
-        fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+        if self.platform == TargetPlatform::WindowsX64 {
+            fg.code.extend_from_slice(&[0x48, 0x83, 0xC4, 0x20]); // add rsp, 32
+        }
         
         fg.invalidate_reg(Reg::Rax);
         if fg.non_spillable.contains(&dst) {

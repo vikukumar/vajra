@@ -1967,28 +1967,21 @@ pub unsafe extern "C" fn vajra_cmp(a: u64, b: u64) -> i64 {
         let vb = untag(b);
         if va < vb { -1 } else if va > vb { 1 } else { 0 }
     } else {
-        if is_tagged(a) && is_valid_bigint(b) {
-            return cmp_i64_bigint(untag(a), b as *const BigInt);
-        }
-        if is_valid_bigint(a) && is_tagged(b) {
-            return -cmp_i64_bigint(untag(b), a as *const BigInt);
-        }
-
         let is_a_num = is_tagged(a) || is_valid_bigint(a);
         let is_b_num = is_tagged(b) || is_valid_bigint(b);
         
         if is_a_num && is_b_num {
-            let bigint_a = if is_tagged(a) {
-                bigint_from_i64(untag(a))
+            if is_tagged(a) && is_tagged(b) {
+                let va = untag(a);
+                let vb = untag(b);
+                if va < vb { -1 } else if va > vb { 1 } else { 0 }
+            } else if is_tagged(a) {
+                cmp_i64_bigint(untag(a), b as *const BigInt)
+            } else if is_tagged(b) {
+                -cmp_i64_bigint(untag(b), a as *const BigInt)
             } else {
-                a as *mut BigInt
-            };
-            let bigint_b = if is_tagged(b) {
-                bigint_from_i64(untag(b))
-            } else {
-                b as *mut BigInt
-            };
-            bigint_cmp(bigint_a, bigint_b)
+                bigint_cmp(a as *const BigInt, b as *const BigInt)
+            }
         } else {
             if a == 0 || b == 0 {
                 return if a == 0 { -1 } else { 1 };
