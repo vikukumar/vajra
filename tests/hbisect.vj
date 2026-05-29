@@ -1,0 +1,30 @@
+// Test up to ternary operator
+rakho naam = "Vajra"
+lelo version = 1
+maan sankhya = 42
+dharo pi = 3.14
+banao flag = sahi
+set_karo empty = khali
+
+rakho a = sahi
+rakho b = galat
+rakho c = a aur b
+rakho d = a ya b
+
+agar a:
+    dikhao("a sahi hai")
+warna:
+    dikhao("a galat hai")
+
+rakho x = 10
+rakho y = 20
+rakho bada = x > y toh x warna y
+dikhao(bada)
+
+rakho bada2 = x > y ? x : y
+dikhao(bada2)
+
+rakho count = 0
+jab_tak count < 3:
+    count = count + 1
+dikhao(count)

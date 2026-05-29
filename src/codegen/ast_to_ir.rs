@@ -125,9 +125,37 @@ impl AstToIr {
             self.collect_function_signatures(stmt);
         }
 
-        // Second pass: lower each statement
+        // Check if there is an explicit @main function
+        let has_explicit_main = program.statements.iter().any(|s| {
+            matches!(s, Statement::Function { is_main: true, .. })
+        });
+
+        // Collect top-level non-function statements for implicit main
+        let top_level_stmts: Vec<Statement> = if !has_explicit_main {
+            program.statements.iter().filter(|s| {
+                !matches!(s, Statement::Function { .. } | Statement::Method { .. } | Statement::Class { .. } | Statement::Import(_))
+            }).cloned().collect()
+        } else {
+            Vec::new()
+        };
+
+        // Second pass: lower each statement (functions and classes)
         for stmt in &program.statements {
             self.lower_top_level(stmt)?;
+        }
+
+        // If there is no explicit @main, emit an implicit main() from collected top-level stmts
+        if !has_explicit_main && !top_level_stmts.is_empty() {
+            let implicit_main = Statement::Function {
+                name: "__implicit_main__".to_string(),
+                params: vec![],
+                return_type: VajraType::Void,
+                body: top_level_stmts,
+                is_main: true,
+                is_extern: false,
+                is_inline: false,
+            };
+            self.lower_top_level(&implicit_main)?;
         }
 
         // Compile socket methods
@@ -143,6 +171,7 @@ impl AstToIr {
         }
 
         Ok(self.module)
+
     }
 
     #[allow(dead_code)]
@@ -1096,6 +1125,14 @@ impl<'a> FuncContext<'a> {
                 let mut end_expr = iterable.clone();
                 let mut step_expr = Expression::Literal(Literal::Integer(1));
                 let mut is_range = false;
+                let mut is_array = false;
+                let mut array_elements: Vec<Expression> = Vec::new();
+
+                // Check for array literal iterable: for i in [1, 2, 3]
+                if let Expression::Literal(Literal::Array(ref elems)) = *iterable {
+                    is_array = true;
+                    array_elements = elems.clone();
+                }
 
                 if let Expression::FunctionCall { name, args } = iterable {
                     if name == "range" {
@@ -1118,7 +1155,125 @@ impl<'a> FuncContext<'a> {
                     }
                 }
 
-                if is_range {
+                if is_array {
+                    // Desugar `for i in [e0, e1, e2, ...]` into:
+                    //   let __arr_idx = 0
+                    //   let __arr_len = N
+                    //   let __elem_0 = e0; let __elem_1 = e1; ...
+                    //   while __arr_idx < __arr_len:
+                    //     if __arr_idx == 0: i = __elem_0
+                    //     elif __arr_idx == 1: i = __elem_1
+                    //     ...
+                    //     body
+                    //     __arr_idx = __arr_idx + 1
+
+                    let n = array_elements.len();
+                    let idx_name = format!("__arr_idx_{}", *self.loop_count);
+                    let len_name = format!("__arr_len_{}", *self.loop_count);
+                    *self.loop_count += 1;
+
+                    // Store each element in a temp variable
+                    let mut elem_names = Vec::new();
+                    for (k, elem) in array_elements.iter().enumerate() {
+                        let en = format!("__arr_elem_{}_{}", *self.loop_count, k);
+                        elem_names.push(en.clone());
+                        let let_elem = Statement::Let {
+                            name: en,
+                            value: elem.clone(),
+                            ty: VajraType::Unknown,
+                        };
+                        self.lower_stmt(&let_elem)?;
+                    }
+
+                    // let __arr_idx = 0; let __arr_len = n
+                    let let_idx = Statement::Let {
+                        name: idx_name.clone(),
+                        value: Expression::Literal(Literal::Integer(0)),
+                        ty: VajraType::I64,
+                    };
+                    let let_len = Statement::Let {
+                        name: len_name.clone(),
+                        value: Expression::Literal(Literal::Integer(n as i64)),
+                        ty: VajraType::I64,
+                    };
+                    self.lower_stmt(&let_idx)?;
+                    self.lower_stmt(&let_len)?;
+
+                    // Build if-chain: if idx==0: i=e0; else if idx==1: i=e1; ...
+                    // Wrap it + body + increment into while loop body
+                    let mut dispatch_chain: Option<Statement> = None;
+                    for (k, ename) in elem_names.iter().enumerate().rev() {
+                        let assign_var = Statement::Let {
+                            name: var_name.clone(),
+                            value: Expression::Identifier(ename.clone()),
+                            ty: VajraType::Unknown,
+                        };
+                        let new_node = Statement::If {
+                            condition: Expression::BinaryOp {
+                                left: Box::new(Expression::Identifier(idx_name.clone())),
+                                op: "==".to_string(),
+                                right: Box::new(Expression::Literal(Literal::Integer(k as i64))),
+                            },
+                            then_body: vec![assign_var],
+                            else_body: dispatch_chain.map(|s| vec![s]),
+                        };
+                        dispatch_chain = Some(new_node);
+                    }
+
+                    let incr = Statement::Expression(Expression::Assign {
+                        name: idx_name.clone(),
+                        value: Box::new(Expression::BinaryOp {
+                            left: Box::new(Expression::Identifier(idx_name.clone())),
+                            op: "+".to_string(),
+                            right: Box::new(Expression::Literal(Literal::Integer(1))),
+                        }),
+                    });
+
+                    let mut while_body = Vec::new();
+                    if let Some(dispatch) = dispatch_chain {
+                        while_body.push(dispatch);
+                    }
+                    while_body.extend(body.iter().cloned());
+                    while_body.push(incr.clone());
+
+                    // Rewrite `continue` to prepend index increment — same as C-style for loop
+                    fn rewrite_arr_continues(stmts: &mut Vec<Statement>, step: &Statement) {
+                        let mut i = 0;
+                        while i < stmts.len() {
+                            match &mut stmts[i] {
+                                Statement::Continue => {
+                                    stmts.insert(i, step.clone());
+                                    i += 2;
+                                    continue;
+                                }
+                                Statement::If { then_body, else_body, .. } => {
+                                    rewrite_arr_continues(then_body, step);
+                                    if let Some(eb) = else_body {
+                                        rewrite_arr_continues(eb, step);
+                                    }
+                                }
+                                Statement::TryCatch { try_body, catch_body, .. } => {
+                                    rewrite_arr_continues(try_body, step);
+                                    rewrite_arr_continues(catch_body, step);
+                                }
+                                _ => {}
+                            }
+                            i += 1;
+                        }
+                    }
+                    rewrite_arr_continues(&mut while_body, &incr);
+
+                    let while_stmt = Statement::While {
+                        condition: Expression::BinaryOp {
+                            left: Box::new(Expression::Identifier(idx_name.clone())),
+                            op: "<".to_string(),
+                            right: Box::new(Expression::Identifier(len_name.clone())),
+                        },
+                        body: while_body,
+                    };
+                    self.lower_stmt(&while_stmt)?;
+
+                } else if is_range {
                     let let_var = Statement::Let {
                         name: var_name.clone(),
                         value: start_expr.clone(),
@@ -1285,6 +1440,10 @@ impl<'a> FuncContext<'a> {
                     let r = self.builder.fresh_val();
                     self.builder.emit(IrInstr::StrPtr(r, gname));
                     Ok(r)
+                }
+                Literal::Array(elems) => {
+                    // Return the array length as i64 (for range-fallback use)
+                    Ok(self.builder.const_i64(elems.len() as i64))
                 }
             },
             Expression::Ternary {
@@ -1833,6 +1992,7 @@ impl<'a> FuncContext<'a> {
                 Literal::String(_) => VajraType::Str,
                 Literal::Bool(_) => VajraType::Bool,
                 Literal::Null => VajraType::Ptr(Box::new(VajraType::Void)),
+                Literal::Array(_) => VajraType::Unknown,
             },
             Expression::Identifier(name) => self
                 .var_types

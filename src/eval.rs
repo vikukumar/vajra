@@ -407,6 +407,19 @@ impl Interpreter {
                 Literal::String(s) => Ok(Value::String(s.clone())),
                 Literal::Bool(b) => Ok(Value::Bool(*b)),
                 Literal::Null => Ok(Value::Null),
+                Literal::Array(elems) => {
+                    // Evaluate all elements and build an Array object
+                    let mut fields = HashMap::new();
+                    let mut count = 0i64;
+                    for elem in elems {
+                        let v = self.eval_expression(elem)?;
+                        fields.insert(count.to_string(), v);
+                        count += 1;
+                    }
+                    fields.insert("length".to_string(), Value::Integer(count));
+                    let arr_obj = ObjectInstance { class_name: "Array".to_string(), fields };
+                    Ok(Value::Object(Arc::new(Mutex::new(arr_obj))))
+                }
             },
 
             Expression::Ternary { condition, then_expr, else_expr } => {

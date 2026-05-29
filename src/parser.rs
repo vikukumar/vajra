@@ -792,10 +792,24 @@ impl<'a> Parser<'a> {
                 expr
             }
             TokenKind::LBracket => {
-                self.next_token();
-                let expr = self.parse_expression(0);
-                if self.cur_token.kind == TokenKind::RBracket { self.next_token(); }
-                expr
+                // Parse array literal: [expr, expr, ...]
+                self.next_token(); // consume '['
+                let mut elements = Vec::new();
+                while self.cur_token.kind != TokenKind::RBracket
+                    && self.cur_token.kind != TokenKind::EOF
+                {
+                    self.skip_newlines();
+                    if self.cur_token.kind == TokenKind::RBracket { break; }
+                    elements.push(self.parse_expression(0));
+                    self.skip_newlines();
+                    if self.cur_token.kind == TokenKind::Comma {
+                        self.next_token(); // consume ','
+                    }
+                }
+                if self.cur_token.kind == TokenKind::RBracket {
+                    self.next_token(); // consume ']'
+                }
+                Expression::Literal(Literal::Array(elements))
             }
             TokenKind::Identifier(id) => {
                 let name = id.clone();
@@ -820,7 +834,9 @@ impl<'a> Parser<'a> {
                 Expression::Spawn { task: Box::new(task) }
             }
             _ => {
-                // Produce a null literal for unrecognized tokens to avoid panics
+                // Consume the unknown token to prevent infinite loops.
+                // Return Null so the caller can safely ignore it.
+                self.next_token();
                 Expression::Literal(Literal::Null)
             }
         }

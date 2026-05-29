@@ -105,7 +105,7 @@ pub enum Intrinsic {
     ReadLine,                        // readline()
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Literal {
     Integer(i64),
     BigInt(String),
@@ -113,6 +113,7 @@ pub enum Literal {
     String(String),
     Bool(bool),
     Null,
+    Array(Vec<Expression>),  // [1, 2, 3] array literal
 }
 
 #[derive(Debug, Clone)]
