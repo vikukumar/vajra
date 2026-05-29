@@ -1,8 +1,10 @@
 /// Vajra ELF64 Linker — Pure Rust Linux executable emitter
 /// Produces a statically-linked ELF64 executable.
 /// Uses direct Linux syscalls — zero libc dependency.
+/// Uses own ELF64 object parser — zero external crate dependency.
 
 use anyhow::Result;
+use crate::assembler::elf_writer::parse_elf;
 
 const PT_LOAD: u32 = 1;
 #[allow(dead_code)]
@@ -24,33 +26,29 @@ fn write_u32(buf: &mut Vec<u8>, v: u32) { buf.extend_from_slice(&v.to_le_bytes()
 fn write_u64(buf: &mut Vec<u8>, v: u64) { buf.extend_from_slice(&v.to_le_bytes()); }
 
 pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], _entry_point: &str) -> Result<Vec<u8>> {
-    // Extract .text and .rodata from both object files
+    // Extract .text and .rodata from both object files using our own ELF parser
     let mut text_data: Vec<u8> = Vec::new();
     let mut rodata_data: Vec<u8> = Vec::new();
 
-    for bytes in &[obj_bytes, runtime_bytes] {
+    for (bytes, file_id) in [(obj_bytes, 0usize), (runtime_bytes, 1usize)] {
         if bytes.is_empty() { continue; }
-        if let Ok(elf) = goblin::elf::Elf::parse(bytes) {
-            for sh in elf.section_headers.iter() {
-                let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
-                let off = sh.sh_offset as usize;
-                let size = sh.sh_size as usize;
-                if size == 0 { continue; }
-                let sec_data = if off + size <= bytes.len() {
-                    bytes[off..off + size].to_vec()
-                } else {
-                    vec![0u8; size]
-                };
-                match name {
-                    ".text" => text_data.extend_from_slice(&sec_data),
-                    ".rodata" | ".rdata" => rodata_data.extend_from_slice(&sec_data),
-                    _ => {}
+
+        // Try our own ELF64 parser first
+        if bytes.len() >= 4 && &bytes[0..4] == b"\x7FELF" {
+            if let Ok((sections, _syms, _relas)) = parse_elf(bytes, file_id) {
+                for section in &sections {
+                    match section.name.as_str() {
+                        ".text" => text_data.extend_from_slice(&section.data),
+                        ".rodata" | ".rdata" => rodata_data.extend_from_slice(&section.data),
+                        _ => {}
+                    }
                 }
+                continue;
             }
-        } else {
-            // Raw bytes — assume .text
-            text_data.extend_from_slice(bytes);
         }
+
+        // Fallback: raw bytes assumed to be .text
+        text_data.extend_from_slice(bytes);
     }
 
     // Layout:

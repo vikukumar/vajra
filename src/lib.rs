@@ -28,6 +28,7 @@ pub mod lexer;
 pub mod parser;
 pub mod ir;
 pub mod codegen;
+pub mod assembler;
 pub mod linker;
 pub mod runtime;
 pub mod eval;

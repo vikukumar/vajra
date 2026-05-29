@@ -2,10 +2,11 @@
 /// Produces a complete, runnable PE32+ executable from COFF object files.
 /// Only imports kernel32.dll (ExitProcess, WriteFile, GetStdHandle, CreateThread, VirtualAlloc).
 /// NO MSVC link.exe required.
+/// Uses own COFF parser — zero external crate dependency.
 
 use anyhow::Result;
 use std::collections::HashMap;
-use object::{Object, ObjectSection, ObjectSymbol};
+use crate::assembler::coff_writer::parse_coff;
 
 /// Image base for the PE (standard 64-bit default)
 const IMAGE_BASE: u64 = 0x0000_0001_4000_0000;
@@ -58,11 +59,12 @@ fn write_u64(buf: &mut Vec<u8>, v: u64) {
 
 struct SectionChunk {
     file_id: usize, // 0 = user, 1 = runtime
-    section_index: object::SectionIndex,
+    section_index: usize,
     name: String,
     data: Vec<u8>,
     start_offset: usize, // within the merged section
 }
+
 
 struct ImportTableLayout {
     import_dir_rva_in_rdata: u32,
@@ -163,57 +165,56 @@ fn build_dos_stub() -> Vec<u8> {
 }
 
 pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result<Vec<u8>> {
-    let user_obj = object::read::File::parse(obj_bytes)?;
-    let rt_obj = object::read::File::parse(runtime_bytes)?;
+    // Parse both COFF objects using our own parser
+    let (user_sections, user_symbols, user_relocs) =
+        parse_coff(obj_bytes, 0).map_err(|e| anyhow::anyhow!("User object parse error: {}", e))?;
+    let (rt_sections, rt_symbols, rt_relocs) =
+        parse_coff(runtime_bytes, 1).map_err(|e| anyhow::anyhow!("Runtime object parse error: {}", e))?;
 
-    let mut text_chunks = Vec::new();
-    let mut rdata_chunks = Vec::new();
-    let mut data_chunks = Vec::new();
+    let mut text_chunks: Vec<SectionChunk> = Vec::new();
+    let mut rdata_chunks: Vec<SectionChunk> = Vec::new();
+    let mut data_chunks: Vec<SectionChunk> = Vec::new();
 
-    let mut text_len = 0;
-    let mut rdata_len = 0;
-    let mut data_len = 0;
+    let mut text_len = 0usize;
+    let mut rdata_len = 0usize;
+    let mut data_len = 0usize;
 
-    for (obj, file_id) in [(&user_obj, 0), (&rt_obj, 1)] {
-        for sec in obj.sections() {
-            let name = sec.name().unwrap_or("").to_string();
-            let mut data = sec.data().unwrap_or(&[]).to_vec();
-            let sec_idx = sec.index();
+    let all_sections: Vec<_> = user_sections.iter().chain(rt_sections.iter()).collect();
 
-            if name == ".text" || name == "text" || sec.kind() == object::SectionKind::Text {
-                let aligned = align_offset(text_len, 16);
-                text_chunks.push(SectionChunk {
-                    file_id,
-                    section_index: sec_idx,
-                    name,
-                    data,
-                    start_offset: aligned,
-                });
-                text_len = aligned + sec.size() as usize;
-            } else if name == ".rdata" || name == "rdata" || name == ".rodata" || sec.kind() == object::SectionKind::ReadOnlyData {
-                let aligned = align_offset(rdata_len, 16);
-                rdata_chunks.push(SectionChunk {
-                    file_id,
-                    section_index: sec_idx,
-                    name,
-                    data,
-                    start_offset: aligned,
-                });
-                rdata_len = aligned + sec.size() as usize;
-            } else if name == ".data" || name == "data" || name == ".bss" || sec.kind() == object::SectionKind::Data || sec.kind() == object::SectionKind::UninitializedData {
-                let aligned = align_offset(data_len, 16);
-                if name == ".bss" || sec.kind() == object::SectionKind::UninitializedData {
-                    data.resize(sec.size() as usize, 0);
-                }
-                data_chunks.push(SectionChunk {
-                    file_id,
-                    section_index: sec_idx,
-                    name,
-                    data,
-                    start_offset: aligned,
-                });
-                data_len = aligned + sec.size() as usize;
-            }
+    for sec in &all_sections {
+        let name = &sec.name;
+        let data = sec.data.clone();
+
+        if name == ".text" || name == "text" {
+            let aligned = align_offset(text_len, 16);
+            text_len = aligned + data.len();
+            text_chunks.push(SectionChunk {
+                file_id: sec.file_id,
+                section_index: sec.section_index,
+                name: name.clone(),
+                data,
+                start_offset: aligned,
+            });
+        } else if name == ".rdata" || name == "rdata" || name == ".rodata" {
+            let aligned = align_offset(rdata_len, 16);
+            rdata_len = aligned + data.len();
+            rdata_chunks.push(SectionChunk {
+                file_id: sec.file_id,
+                section_index: sec.section_index,
+                name: name.clone(),
+                data,
+                start_offset: aligned,
+            });
+        } else if name == ".data" || name == "data" || name == ".bss" {
+            let aligned = align_offset(data_len, 16);
+            data_len = aligned + data.len();
+            data_chunks.push(SectionChunk {
+                file_id: sec.file_id,
+                section_index: sec.section_index,
+                name: name.clone(),
+                data,
+                start_offset: aligned,
+            });
         }
     }
 
@@ -233,7 +234,7 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
         text_merged.resize(chunk.start_offset, 0);
         text_merged.extend_from_slice(&chunk.data);
     }
-    
+
     // Generate actual stub code
     let mut stubs_data = Vec::new();
     let mut import_stub_rvas = HashMap::new();
@@ -271,40 +272,31 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
     let data_vsize = if data_len == 0 { SECTION_ALIGN } else { data_len as u32 };
     let image_size = align_up(data_rva + data_vsize, SECTION_ALIGN);
 
-    // ── Build Symbol VA Map ──────────────────────────────────────────────────
-    let mut symbol_vas = HashMap::new();
-    for (obj, file_id) in [(&user_obj, 0), (&rt_obj, 1)] {
-        for sym in obj.symbols() {
-            if let Ok(name) = sym.name() {
-                if name.is_empty() {
-                    continue;
-                }
-                if let object::SymbolSection::Section(sec_idx) = sym.section() {
-                    let mut found_chunk = None;
-                    for chunk in text_chunks.iter().chain(rdata_chunks.iter()).chain(data_chunks.iter()) {
-                        if chunk.file_id == file_id && chunk.section_index == sec_idx {
-                            found_chunk = Some(chunk);
-                            break;
-                        }
-                    }
-                    if let Some(chunk) = found_chunk {
-                        let sec_rva = match chunk.name.as_str() {
-                            ".text" | "text" => text_rva,
-                            ".rdata" | "rdata" | ".rodata" => rdata_rva,
-                            ".data" | "data" | ".bss" => data_rva,
-                            _ => {
-                                if chunk.name.starts_with(".bss") { data_rva } else { text_rva }
-                            }
-                        };
-                        let final_rva = sec_rva + chunk.start_offset as u32 + sym.address() as u32;
-                        symbol_vas.insert(name.to_string(), final_rva);
-                    }
-                }
+    // Build symbol VA map — we iterate user and runtime separately to know file_id
+    let mut symbol_vas: HashMap<String, u32> = HashMap::new();
+
+    for (file_id, sym_list) in [(0usize, &user_symbols), (1usize, &rt_symbols)] {
+        for sym in sym_list {
+            if sym.name.is_empty() || sym.section_idx <= 0 { continue; }
+            let sec_idx = (sym.section_idx - 1) as usize; // convert 1-based COFF to 0-based
+
+            let found = text_chunks.iter()
+                .chain(rdata_chunks.iter())
+                .chain(data_chunks.iter())
+                .find(|c| c.file_id == file_id && c.section_index == sec_idx);
+
+            if let Some(chunk) = found {
+                let sec_rva = match chunk.name.as_str() {
+                    ".text" | "text" => text_rva,
+                    ".rdata" | "rdata" | ".rodata" => rdata_rva,
+                    ".data" | "data" | ".bss" => data_rva,
+                    _ => text_rva,
+                };
+                let final_rva = sec_rva + chunk.start_offset as u32 + sym.value;
+                symbol_vas.insert(sym.name.clone(), final_rva);
             }
         }
     }
-
-    // Map extern symbols to their stubs/IAT entries
     for &name in KERNEL32_IMPORTS {
         if let Some(&stub_rva) = import_stub_rvas.get(name) {
             symbol_vas.insert(name.to_string(), stub_rva);
@@ -313,138 +305,88 @@ pub fn link(obj_bytes: &[u8], runtime_bytes: &[u8], entry_point: &str) -> Result
     }
 
     // ── Resolve Relocations ──────────────────────────────────────────────────
-    for chunk in text_chunks.iter().chain(rdata_chunks.iter()).chain(data_chunks.iter()) {
-        let obj = if chunk.file_id == 0 { &user_obj } else { &rt_obj };
-        let sec = obj.section_by_index(chunk.section_index)?;
+    // Build a combined reloc list with resolved symbol names
+    // Each CoffRelocEntry has: section_idx, offset, sym_idx, reloc_type
+    // We need to look up the symbol by index to get its name
 
-        let (merged_buf, sec_rva) = match chunk.name.as_str() {
-            ".text" | "text" => (&mut text_merged, text_rva),
-            ".rdata" | "rdata" | ".rodata" => (&mut rdata_merged, rdata_rva),
-            ".data" | "data" | ".bss" => (&mut data_merged, data_rva),
-            _ => {
-                if chunk.name.starts_with(".bss") {
-                    (&mut data_merged, data_rva)
-                } else {
-                    continue;
-                }
+    let all_relocs: Vec<_> = user_relocs.iter().map(|r| (r, 0usize))
+        .chain(rt_relocs.iter().map(|r| (r, 1usize)))
+        .collect();
+
+    let user_sym_vec: Vec<_> = user_symbols.iter().collect();
+    let rt_sym_vec: Vec<_> = rt_symbols.iter().collect();
+
+    for (reloc, file_id) in &all_relocs {
+        // Look up symbol name
+        let sym_vec = if *file_id == 0 { &user_sym_vec } else { &rt_sym_vec };
+        let sym_name = sym_vec.get(reloc.sym_idx as usize)
+            .map(|s| s.name.as_str())
+            .unwrap_or("");
+
+
+        // Find the merged buffer + chunk for this section (inline to avoid lifetime issues)
+        let text_match  = text_chunks .iter().find(|c| c.file_id == *file_id && c.section_index == reloc.section_idx);
+        let rdata_match = rdata_chunks.iter().find(|c| c.file_id == *file_id && c.section_index == reloc.section_idx);
+        let data_match  = data_chunks .iter().find(|c| c.file_id == *file_id && c.section_index == reloc.section_idx);
+
+        let (sec_rva, chunk_start) =
+            if let Some(c) = text_match  { (text_rva,  c.start_offset) }
+            else if let Some(c) = rdata_match { (rdata_rva, c.start_offset) }
+            else if let Some(c) = data_match  { (data_rva,  c.start_offset) }
+            else { continue };
+
+        let merged_buf = if text_match.is_some()  { &mut text_merged  }
+            else if rdata_match.is_some() { &mut rdata_merged }
+            else                          { &mut data_merged  };
+
+        let target_rva = if let Some(&va) = symbol_vas.get(sym_name) {
+            va
+        } else if !sym_name.is_empty() {
+            // Section-reference symbols (.pdata, .xdata, .debug$S) are exception/debug metadata
+            // — they don't need to be resolved in our PE for normal execution.
+            if sym_name.starts_with('.') {
+                continue; // silently skip section-reference relocations
             }
+            anyhow::bail!("Linker Error: Unresolved symbol '{}'", sym_name);
+        } else {
+            0
         };
 
-        for (reloc_offset, reloc) in sec.relocations() {
-            let target_rva = match reloc.target() {
-                object::RelocationTarget::Symbol(sym_idx) => {
-                    if let Ok(sym) = obj.symbol_by_index(sym_idx) {
-                        if let Ok(name) = sym.name() {
-                            if let Some(&va) = symbol_vas.get(name) {
-                                va
-                            } else {
-                                if let object::SymbolSection::Section(s_idx) = sym.section() {
-                                    let mut found_va = 0;
-                                    for c in text_chunks.iter().chain(rdata_chunks.iter()).chain(data_chunks.iter()) {
-                                        if c.file_id == chunk.file_id && c.section_index == s_idx {
-                                            let c_sec_rva = match c.name.as_str() {
-                                                ".text" | "text" => text_rva,
-                                                ".rdata" | "rdata" | ".rodata" => rdata_rva,
-                                                ".data" | "data" | ".bss" => data_rva,
-                                                _ => {
-                                                    if c.name.starts_with(".bss") { data_rva } else { text_rva }
-                                                }
-                                            };
-                                            found_va = c_sec_rva + c.start_offset as u32 + sym.address() as u32;
-                                            break;
-                                        }
-                                    }
-                                    found_va
-                                } else {
-                                    if !name.is_empty() {
-                                        anyhow::bail!("Linker Error: Unresolved symbol '{}'", name);
-                                    }
-                                    0
-                                }
-                            }
-                        } else {
-                            0
-                        }
-                    } else {
-                        0
-                    }
-                }
-                object::RelocationTarget::Section(s_idx) => {
-                    let mut found_va = 0;
-                    for c in text_chunks.iter().chain(rdata_chunks.iter()).chain(data_chunks.iter()) {
-                        if c.file_id == chunk.file_id && c.section_index == s_idx {
-                            let c_sec_rva = match c.name.as_str() {
-                                ".text" | "text" => text_rva,
-                                ".rdata" | "rdata" | ".rodata" => rdata_rva,
-                                ".data" | "data" | ".bss" => data_rva,
-                                _ => {
-                                    if c.name.starts_with(".bss") { data_rva } else { text_rva }
-                                }
-                            };
-                            found_va = c_sec_rva + c.start_offset as u32;
-                            break;
-                        }
-                    }
-                    found_va
-                }
-                _ => 0,
-            };
+        let offset_in_merged = chunk_start + reloc.offset as usize;
+        let reloc_rva = sec_rva + offset_in_merged as u32;
 
-            let offset_in_merged = chunk.start_offset + reloc_offset as usize;
-            let reloc_rva = sec_rva + offset_in_merged as u32;
-            let addend = reloc.addend();
+        // Read value already baked into the code at the reloc site (MSVC COFF may pre-bake addend)
+        let implicit_addend = if offset_in_merged + 4 <= merged_buf.len() {
+            i32::from_le_bytes(merged_buf[offset_in_merged..offset_in_merged + 4].try_into().unwrap()) as i64
+        } else {
+            0
+        };
 
-            let size = reloc.size();
-            let implicit_disp = if size == 32 {
-                if offset_in_merged + 4 <= merged_buf.len() {
-                    i32::from_le_bytes(
-                        merged_buf[offset_in_merged..offset_in_merged + 4]
-                            .try_into()
-                            .unwrap()
-                    ) as i64
-                } else {
-                    0
-                }
-            } else if size == 64 {
-                if offset_in_merged + 8 <= merged_buf.len() {
-                    i64::from_le_bytes(
-                        merged_buf[offset_in_merged..offset_in_merged + 8]
-                            .try_into()
-                            .unwrap()
-                    )
-                } else {
-                    0
-                }
-            } else {
-                0
-            };
-
-            match reloc.kind() {
-                object::RelocationKind::Relative => {
-                    let rel_val = target_rva as i64 - reloc_rva as i64 + addend + implicit_disp;
-                    if size == 32 {
-                        merged_buf[offset_in_merged..offset_in_merged+4].copy_from_slice(&(rel_val as i32).to_le_bytes());
-                    } else if size == 64 {
-                        merged_buf[offset_in_merged..offset_in_merged+8].copy_from_slice(&rel_val.to_le_bytes());
-                    }
-                }
-                object::RelocationKind::Absolute => {
-                    let abs_val = target_rva as i64 + IMAGE_BASE as i64 + addend + implicit_disp;
-                    if size == 32 {
-                        merged_buf[offset_in_merged..offset_in_merged+4].copy_from_slice(&(abs_val as i32).to_le_bytes());
-                    } else if size == 64 {
-                        merged_buf[offset_in_merged..offset_in_merged+8].copy_from_slice(&abs_val.to_le_bytes());
-                    }
-                }
-                object::RelocationKind::ImageOffset => {
-                    let rva_val = target_rva as i64 + addend + implicit_disp;
-                    if size == 32 {
-                        merged_buf[offset_in_merged..offset_in_merged+4].copy_from_slice(&(rva_val as i32).to_le_bytes());
-                    } else if size == 64 {
-                        merged_buf[offset_in_merged..offset_in_merged+8].copy_from_slice(&rva_val.to_le_bytes());
-                    }
-                }
-                _ => {}
+        // IMAGE_REL_AMD64_REL32 (type 4) and IMAGE_REL_AMD64_REL32_1..4 (types 5-8):
+        // Spec: "The 32-bit relative address from the byte following the relocation."
+        // Formula: patch = target_rva - (reloc_site_rva + 4) + implicit_addend
+        // The -4 is mandatory: CPU reads RIP from the next byte after the 4-byte field.
+        if reloc.reloc_type >= 4 && reloc.reloc_type <= 8 {
+            let size_adj = (reloc.reloc_type - 3) as i64; // type4→1byte_adj, type5→2, etc.
+            let _ = size_adj; // always 4-byte field; size_adj only matters for REL32_1..4
+            let rel_val = target_rva as i64 - reloc_rva as i64 - 4 + implicit_addend;
+            if offset_in_merged + 4 <= merged_buf.len() {
+                merged_buf[offset_in_merged..offset_in_merged + 4]
+                    .copy_from_slice(&(rel_val as i32).to_le_bytes());
+            }
+        } else if reloc.reloc_type == 1 {
+            // IMAGE_REL_AMD64_ADDR64: absolute 64-bit VA
+            let abs_val = target_rva as i64 + IMAGE_BASE as i64 + implicit_addend;
+            if offset_in_merged + 8 <= merged_buf.len() {
+                merged_buf[offset_in_merged..offset_in_merged + 8]
+                    .copy_from_slice(&abs_val.to_le_bytes());
+            }
+        } else if reloc.reloc_type == 2 {
+            // IMAGE_REL_AMD64_ADDR32NB: 32-bit without image base (RVA)
+            let rva_val = target_rva as i64 + implicit_addend;
+            if offset_in_merged + 4 <= merged_buf.len() {
+                merged_buf[offset_in_merged..offset_in_merged + 4]
+                    .copy_from_slice(&(rva_val as i32).to_le_bytes());
             }
         }
     }

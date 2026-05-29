@@ -1,14 +1,14 @@
 //! Vajra x86-64 Code Generator + Instruction Encoder
 //! Compiles Vajra IR → x86-64 machine code stored in COFF/ELF object format.
-//! Uses the `object` crate (pure Rust) to write the object file.
+//! Uses own COFF/ELF writers (zero external crates).
 //! NO LLVM, NO MSVC, NO GCC — 100% self-contained.
 
 use std::collections::HashMap;
-use object::write::{Object, StandardSection, Symbol, SymbolSection, Relocation};
-use object::{Architecture, BinaryFormat, Endianness, SymbolKind, SymbolScope, RelocationEncoding, RelocationFlags};
 use anyhow::Result;
 use crate::ir::*;
 use crate::linker::TargetPlatform;
+use crate::assembler::coff_writer::{CoffObject, CoffReloc as CoffRelocOut, CoffSymbol};
+use crate::assembler::elf_writer::{ElfObject, ElfReloc as ElfRelocOut, ElfSymbol, R_X86_64_PLT32};
 
 // ─── Register Definitions ────────────────────────────────────────────────────
 
@@ -403,69 +403,7 @@ impl<'m> X86_64Codegen<'m> {
     }
 
     pub fn compile_module(&mut self) -> Result<Vec<u8>> {
-        let (binary_format, arch) = match &self.platform {
-            TargetPlatform::WindowsX64 => (BinaryFormat::Coff, Architecture::X86_64),
-            TargetPlatform::LinuxX64 => (BinaryFormat::Elf, Architecture::X86_64),
-            TargetPlatform::MacOsX64 => (BinaryFormat::Elf, Architecture::X86_64), // Using ELF for macOS fallback
-        };
-
-        let mut obj = Object::new(binary_format, arch, Endianness::Little);
-
-        let rdata_section = obj.section_id(StandardSection::ReadOnlyData);
-        let data_section = obj.section_id(StandardSection::Data);
-        for global in &self.module.globals {
-            let section = if global.name == "vajra_global_instance" {
-                data_section
-            } else {
-                rdata_section
-            };
-            let offset = obj.append_section_data(section, &global.data, 8);
-            self.global_offsets.insert(global.name.clone(), offset);
-            obj.add_symbol(Symbol {
-                name: global.name.as_bytes().to_vec(),
-                value: offset,
-                size: global.data.len() as u64,
-                kind: SymbolKind::Data,
-                scope: SymbolScope::Compilation,
-                weak: false,
-                section: SymbolSection::Section(section),
-                flags: object::SymbolFlags::None,
-            });
-        }
-
-        let text_section = obj.section_id(StandardSection::Text);
-
-        // Standard runtime externs
-        let runtime_syms = [
-            "vajra_runtime_init", "vajra_print_i64", "vajra_print_f64",
-            "vajra_print_str", "vajra_print_auto", "vajra_alloc", "vajra_free",
-            "vajra_exit", "vajra_throw", "vajra_spawn", "vajra_spawn_val",
-            "vajra_strlen", "vajra_readline", "vajra_parallel_for", "printf",
-        ];
-        let mut extern_sym_ids = HashMap::new();
-        for &sym in &runtime_syms {
-            let sym_id = obj.add_symbol(Symbol {
-                name: sym.as_bytes().to_vec(),
-                value: 0, size: 0,
-                kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-                weak: false, section: SymbolSection::Undefined,
-                flags: object::SymbolFlags::None,
-            });
-            extern_sym_ids.insert(sym.to_string(), sym_id);
-        }
-        for name in &self.module.extern_functions {
-            if !extern_sym_ids.contains_key(name) {
-                let sym_id = obj.add_symbol(Symbol {
-                    name: name.as_bytes().to_vec(),
-                    value: 0, size: 0,
-                    kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-                    weak: false, section: SymbolSection::Undefined,
-                    flags: object::SymbolFlags::None,
-                });
-                extern_sym_ids.insert(name.clone(), sym_id);
-            }
-        }
-
+        // Compile all functions in parallel (read-only access to self)
         let self_ref = &*self;
         let functions: Vec<_> = self.module.functions.iter().filter(|f| !f.is_extern).collect();
         let compiled_funcs: Vec<(String, Result<FuncGen>, bool)> = std::thread::scope(|s| {
@@ -479,53 +417,207 @@ impl<'m> X86_64Codegen<'m> {
             handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
 
-        for (name, func_code_res, is_main) in compiled_funcs {
-            let func_code = func_code_res?;
-            let func_offset = obj.append_section_data(text_section, &func_code.code, 16);
+        match &self.platform {
+            TargetPlatform::WindowsX64 => self.emit_coff(compiled_funcs),
+            TargetPlatform::LinuxX64 | TargetPlatform::MacOsX64 => self.emit_elf(compiled_funcs),
+        }
+    }
 
-            let func_sym_id = obj.add_symbol(Symbol {
-                name: name.as_bytes().to_vec(),
-                value: func_offset,
-                size: func_code.code.len() as u64,
-                kind: SymbolKind::Text,
-                scope: if is_main { SymbolScope::Dynamic } else { SymbolScope::Compilation },
-                weak: false,
-                section: SymbolSection::Section(text_section),
-                flags: object::SymbolFlags::None,
-            });
+    fn emit_coff(&mut self, compiled_funcs: Vec<(String, Result<FuncGen>, bool)>) -> Result<Vec<u8>> {
+        let mut obj = CoffObject::new();
 
-            // Apply relocations
-            for reloc in &func_code.relocs {
-                let sym_id = if let Some(&id) = extern_sym_ids.get(&reloc.symbol) {
-                    id
-                } else {
-                    obj.add_symbol(Symbol {
-                        name: reloc.symbol.as_bytes().to_vec(),
-                        value: 0, size: 0,
-                        kind: SymbolKind::Text, scope: SymbolScope::Dynamic,
-                        weak: false, section: SymbolSection::Undefined,
-                        flags: object::SymbolFlags::None,
-                    })
-                };
+        // Globals → .rdata and .data
+        let mut rdata_offsets: HashMap<String, u32> = HashMap::new();
+        let mut data_offsets: HashMap<String, u32> = HashMap::new();
 
-                obj.add_relocation(
-                    text_section,
-                    Relocation {
-                        offset: func_offset + reloc.offset,
-                        symbol: sym_id,
-                        addend: reloc.addend,
-                        flags: RelocationFlags::Generic {
-                            kind: object::RelocationKind::Relative,
-                            encoding: RelocationEncoding::Generic,
-                            size: 32,
-                        },
-                    },
-                ).map_err(|e| anyhow::anyhow!("Relocation error: {}", e))?;
+        for global in &self.module.globals {
+            if global.name == "vajra_global_instance" {
+                // Mutable → .data
+                let off = obj.data.len() as u32;
+                // Align to 8 bytes
+                while obj.data.len() % 8 != 0 { obj.data.push(0); }
+                data_offsets.insert(global.name.clone(), obj.data.len() as u32);
+                obj.data.extend_from_slice(&global.data);
+                obj.defined_symbols.push(CoffSymbol {
+                    name: global.name.clone(),
+                    section: 3, // .data
+                    value: off,
+                    is_function: false,
+                    is_external: false,
+                });
+            } else {
+                // Read-only → .rdata
+                while obj.rdata.len() % 8 != 0 { obj.rdata.push(0); }
+                let off = obj.rdata.len() as u32;
+                rdata_offsets.insert(global.name.clone(), off);
+                obj.rdata.extend_from_slice(&global.data);
+                obj.defined_symbols.push(CoffSymbol {
+                    name: global.name.clone(),
+                    section: 2, // .rdata
+                    value: off,
+                    is_function: false,
+                    is_external: false,
+                });
             }
-            let _ = func_sym_id;
         }
 
-        obj.write().map_err(|e| anyhow::anyhow!("Object write error: {}", e))
+        // Collect all extern symbols
+        let runtime_syms = [
+            "vajra_runtime_init", "vajra_print_i64", "vajra_print_f64",
+            "vajra_print_str", "vajra_print_auto", "vajra_alloc", "vajra_free",
+            "vajra_exit", "vajra_throw", "vajra_spawn", "vajra_spawn_val",
+            "vajra_strlen", "vajra_readline", "vajra_parallel_for", "printf",
+        ];
+        let mut added_externs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for &sym in &runtime_syms {
+            added_externs.insert(sym.to_string());
+            obj.extern_symbols.push(sym.to_string());
+        }
+        for name in &self.module.extern_functions {
+            if added_externs.insert(name.clone()) {
+                obj.extern_symbols.push(name.clone());
+            }
+        }
+
+        // Add runtime helpers that are called from codegen
+        let helpers = [
+            "vajra_add", "vajra_sub", "vajra_mul", "vajra_div", "vajra_rem",
+            "vajra_cmp", "vajra_and", "vajra_or", "vajra_not",
+            "vajra_math_sin", "vajra_math_cos", "vajra_math_tan",
+            "vajra_math_sqrt", "vajra_math_abs", "vajra_math_log", "vajra_math_pow",
+            "vajra_random_float", "vajra_bigint_from_digits",
+        ];
+        for &h in &helpers {
+            if added_externs.insert(h.to_string()) {
+                obj.extern_symbols.push(h.to_string());
+            }
+        }
+
+        // Emit functions into .text
+        for (name, func_code_res, is_main) in compiled_funcs {
+            let func_code = func_code_res?;
+            let func_offset = obj.text.len() as u32;
+            // Align to 16 bytes
+            while obj.text.len() % 16 != 0 { obj.text.push(0x90); } // NOP padding
+            let func_offset = obj.text.len() as u32;
+            obj.text.extend_from_slice(&func_code.code);
+
+            obj.defined_symbols.push(CoffSymbol {
+                name: name.clone(),
+                section: 1, // .text
+                value: func_offset,
+                is_function: true,
+                is_external: is_main, // main is the export
+            });
+
+            // Translate relocations
+            for reloc in &func_code.relocs {
+                let sym = reloc.symbol.clone();
+                // Ensure this extern is registered
+                if !added_externs.contains(&sym) {
+                    // Check if it's a defined function (forward ref)
+                    // It will be resolved during linking — add as extern for now
+                    added_externs.insert(sym.clone());
+                    obj.extern_symbols.push(sym.clone());
+                }
+                obj.text_relocs.push(CoffRelocOut {
+                    offset: func_offset + reloc.offset as u32,
+                    symbol: sym,
+                    addend: reloc.addend as i32,
+                });
+            }
+        }
+
+        Ok(obj.write())
+    }
+
+    fn emit_elf(&mut self, compiled_funcs: Vec<(String, Result<FuncGen>, bool)>) -> Result<Vec<u8>> {
+        let mut obj = ElfObject::new();
+
+        // Globals → .rodata and .data
+        for global in &self.module.globals {
+            if global.name == "vajra_global_instance" {
+                while obj.data.len() % 8 != 0 { obj.data.push(0); }
+                let off = obj.data.len() as u64;
+                obj.data.extend_from_slice(&global.data);
+                obj.defined_symbols.push(ElfSymbol {
+                    name: global.name.clone(),
+                    section: 2, // .data (section index 3 in ELF = 1-based, but ElfObject uses 0-based)
+                    value: off,
+                    size: global.data.len() as u64,
+                    is_function: false,
+                    is_global: false,
+                });
+            } else {
+                while obj.rodata.len() % 8 != 0 { obj.rodata.push(0); }
+                let off = obj.rodata.len() as u64;
+                obj.rodata.extend_from_slice(&global.data);
+                obj.defined_symbols.push(ElfSymbol {
+                    name: global.name.clone(),
+                    section: 1, // .rodata
+                    value: off,
+                    size: global.data.len() as u64,
+                    is_function: false,
+                    is_global: false,
+                });
+            }
+        }
+
+        // Extern symbols
+        let runtime_syms = [
+            "vajra_runtime_init", "vajra_print_i64", "vajra_print_f64",
+            "vajra_print_str", "vajra_print_auto", "vajra_alloc", "vajra_free",
+            "vajra_exit", "vajra_throw", "vajra_spawn", "vajra_spawn_val",
+            "vajra_strlen", "vajra_readline", "vajra_parallel_for", "printf",
+            "vajra_add", "vajra_sub", "vajra_mul", "vajra_div", "vajra_rem",
+            "vajra_cmp", "vajra_and", "vajra_or", "vajra_not",
+            "vajra_math_sin", "vajra_math_cos", "vajra_math_tan",
+            "vajra_math_sqrt", "vajra_math_abs", "vajra_math_log", "vajra_math_pow",
+            "vajra_random_float", "vajra_bigint_from_digits",
+        ];
+        let mut added_externs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for &sym in &runtime_syms {
+            added_externs.insert(sym.to_string());
+            obj.extern_symbols.push(sym.to_string());
+        }
+        for name in &self.module.extern_functions {
+            if added_externs.insert(name.clone()) {
+                obj.extern_symbols.push(name.clone());
+            }
+        }
+
+        // Functions → .text
+        for (name, func_code_res, is_main) in compiled_funcs {
+            let func_code = func_code_res?;
+            while obj.text.len() % 16 != 0 { obj.text.push(0x90); }
+            let func_offset = obj.text.len() as u64;
+            obj.text.extend_from_slice(&func_code.code);
+
+            obj.defined_symbols.push(ElfSymbol {
+                name: name.clone(),
+                section: 0, // .text (index 0 in our list)
+                value: func_offset,
+                size: func_code.code.len() as u64,
+                is_function: true,
+                is_global: true,
+            });
+
+            for reloc in &func_code.relocs {
+                let sym = reloc.symbol.clone();
+                if !added_externs.contains(&sym) {
+                    added_externs.insert(sym.clone());
+                    obj.extern_symbols.push(sym.clone());
+                }
+                obj.text_relocs.push(ElfRelocOut {
+                    offset: func_offset + reloc.offset,
+                    symbol: sym,
+                    rela_type: R_X86_64_PLT32,
+                    addend: reloc.addend,
+                });
+            }
+        }
+
+        Ok(obj.write())
     }
 
     fn compile_function(&self, func: &IrFunction) -> Result<FuncGen> {

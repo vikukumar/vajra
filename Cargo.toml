@@ -15,10 +15,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 lazy_static = "1.5.0"
 # For hashing keywords
 hashbrown = "0.14.5"
-# Pure-Rust object file (COFF/ELF) writer — replaces LLVM's object emitter
-object = { version = "0.36", features = ["write"] }
-# Pure-Rust PE (Windows EXE) parsing for the linker
-goblin = { version = "0.9", default-features = false, features = ["elf32", "elf64", "pe32", "pe64", "endian_fd", "mach32", "mach64", "archive", "te"] }
+# object and goblin crates removed — replaced by own COFF/ELF writers in src/assembler/
 
 [lib]
 name = "vajra_core"
