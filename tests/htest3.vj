@@ -1,0 +1,25 @@
+// Test @mukhiya (Hinglish main decorator)
+@mukhiya
+fn shuruat():
+    rakho x = 42
+    rakho y = 58
+    rakho jod = x + y
+    dikhao(jod)
+
+    // Ternary test
+    rakho bada = x > y toh x warna y
+    bolo(bada)
+
+    // Boolean values
+    rakho sach_wala = sahi
+    rakho jhooth_wala = galat
+    rakho aur_result = sach_wala aur jhooth_wala
+    rakho ya_result  = sach_wala ya jhooth_wala
+    bol(aur_result)
+    bol(ya_result)
+
+    // While loop
+    rakho count = 0
+    jab_tak count < 5:
+        count = count + 1
+    dikhao(count)

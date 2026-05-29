@@ -373,36 +373,137 @@ lazy_static! {
         m.insert("출력",       TokenKind::Identifier("print".to_string()));
 
         // ── Hinglish ────────────────────────────────────────────────────────
-        m.insert("rakho",     TokenKind::Let);
-        m.insert("lelo",      TokenKind::Let);
-        m.insert("maan",      TokenKind::Let);
-        m.insert("dharo",     TokenKind::Let);
-        m.insert("astu",      TokenKind::Let);
-        m.insert("rakh",      TokenKind::Let);
-        m.insert("agar",      TokenKind::If);
-        m.insert("warna",     TokenKind::Else);
-        m.insert("nahi_to",   TokenKind::Else);
-        m.insert("bhejo",     TokenKind::Return);
-        m.insert("de_do",     TokenKind::Return);
-        m.insert("jab_tak",   TokenKind::While);
-        m.insert("dikhao",    TokenKind::Identifier("print".to_string()));
-        m.insert("likho",     TokenKind::Identifier("print".to_string()));
-        m.insert("class",     TokenKind::Class);
-        m.insert("ye",        TokenKind::This);
-        m.insert("yeh",       TokenKind::This);
-        m.insert("apna",      TokenKind::This);
-        m.insert("apne",      TokenKind::This);
-        m.insert("khud",      TokenKind::This);
-        m.insert("swayam",    TokenKind::This);
-        m.insert("mera",      TokenKind::This);
-        m.insert("khud_ka",   TokenKind::This);
-        m.insert("karya",     TokenKind::Function);
-        m.insert("kriya",     TokenKind::Function);
-        m.insert("kam",       TokenKind::Function);
-        m.insert("kam_karo",  TokenKind::Function);
-        m.insert("vidhi",     TokenKind::Function);
-        m.insert("tarika",    TokenKind::Function);
-        m.insert("dhancha",   TokenKind::Class);
+        // Variable / let declarations
+        m.insert("rakho",         TokenKind::Let);
+        m.insert("lelo",          TokenKind::Let);
+        m.insert("maan",          TokenKind::Let);
+        m.insert("dharo",         TokenKind::Let);
+        m.insert("astu",          TokenKind::Let);
+        m.insert("rakh",          TokenKind::Let);
+        m.insert("banao",         TokenKind::Let);
+        m.insert("dhro",          TokenKind::Let);
+        m.insert("lo",            TokenKind::Let);
+        m.insert("set_karo",      TokenKind::Let);
+        // Functions
+        m.insert("karya",         TokenKind::Function);
+        m.insert("kriya",         TokenKind::Function);
+        m.insert("kam",           TokenKind::Function);
+        m.insert("kam_karo",      TokenKind::Function);
+        m.insert("vidhi",         TokenKind::Function);
+        m.insert("tarika",        TokenKind::Function);
+        m.insert("nuskha",        TokenKind::Function);
+        m.insert("funty",         TokenKind::Function);
+        m.insert("karo",          TokenKind::Function);
+        m.insert("kaam",          TokenKind::Function);
+        m.insert("kaam_karo",     TokenKind::Function);
+        // Conditionals
+        m.insert("agar",          TokenKind::If);
+        m.insert("yadi",          TokenKind::If);
+        m.insert("warna",         TokenKind::Else);
+        m.insert("nahi_to",       TokenKind::Else);
+        m.insert("nahito",        TokenKind::Else);
+        m.insert("anya",          TokenKind::Else);
+        m.insert("varna",         TokenKind::Else);
+        // Ternary helpers: toh/to/tab map to '?' (Question token)
+        m.insert("toh",           TokenKind::Question);
+        m.insert("tab",           TokenKind::Question);
+        // Loops
+        m.insert("jab_tak",       TokenKind::While);
+        m.insert("chalao",        TokenKind::For);
+        m.insert("chalo",         TokenKind::For);
+        m.insert("baari",         TokenKind::For);
+        m.insert("har",           TokenKind::For);
+        m.insert("ghoomao",       TokenKind::For);
+        m.insert("me",            TokenKind::In);
+        m.insert("ke_andar",      TokenKind::In);
+        // Flow control
+        m.insert("ruko",          TokenKind::Break);
+        m.insert("tod_do",        TokenKind::Break);
+        m.insert("bas_karo",      TokenKind::Break);
+        m.insert("bas",           TokenKind::Break);
+        m.insert("chalo_aage",    TokenKind::Continue);
+        m.insert("aage_bado",     TokenKind::Continue);
+        m.insert("aage_badho",    TokenKind::Continue);
+        m.insert("chalate_raho",  TokenKind::Continue);
+        // Error handling
+        m.insert("koshish",       TokenKind::Try);
+        m.insert("prayas",        TokenKind::Try);
+        m.insert("pakdo",         TokenKind::Catch);
+        m.insert("pakado",        TokenKind::Catch);
+        m.insert("fenko",         TokenKind::Throw);
+        m.insert("phek",          TokenKind::Throw);
+        m.insert("pheko",         TokenKind::Throw);
+        // Import
+        m.insert("le_aao",        TokenKind::Import);
+        m.insert("aayaat",        TokenKind::Import);
+        m.insert("laao",          TokenKind::Import);
+        // Return
+        m.insert("bhejo",         TokenKind::Return);
+        m.insert("de_do",         TokenKind::Return);
+        m.insert("vapas_karo",    TokenKind::Return);
+        m.insert("loutao",        TokenKind::Return);
+        m.insert("louta",         TokenKind::Return);
+        m.insert("lauta",         TokenKind::Return);
+        m.insert("louto",         TokenKind::Return);
+        m.insert("vapasi",        TokenKind::Return);
+        m.insert("wapas",         TokenKind::Return);
+        m.insert("wapas_karo",    TokenKind::Return);
+        // Boolean operators as keywords (map to &&, ||, !)
+        m.insert("aur",           TokenKind::AndAnd);
+        m.insert("aor",           TokenKind::AndAnd);
+        m.insert("ya",            TokenKind::OrOr);
+        m.insert("nahi",          TokenKind::Bang);
+        m.insert("na",            TokenKind::Bang);
+        m.insert("nah",           TokenKind::Bang);
+        // Boolean values
+        m.insert("sahi",          TokenKind::True);
+        m.insert("sach",          TokenKind::True);
+        m.insert("satya",         TokenKind::True);
+        m.insert("bilkul",        TokenKind::True);
+        m.insert("galat",         TokenKind::False);
+        m.insert("jhooth",        TokenKind::False);
+        m.insert("asatya",        TokenKind::False);
+        m.insert("jhuta",         TokenKind::False);
+        // Null / empty values
+        m.insert("khali",         TokenKind::Null);
+        m.insert("kuch_nahi",     TokenKind::Null);
+        m.insert("kuch_nahin",    TokenKind::Null);
+        m.insert("shunya",        TokenKind::Null);
+        m.insert("khaali",        TokenKind::Null);
+        // Print intrinsics
+        m.insert("dikhao",        TokenKind::Identifier("println".to_string()));
+        m.insert("likho",         TokenKind::Identifier("println".to_string()));
+        m.insert("bol",           TokenKind::Identifier("println".to_string()));
+        m.insert("bolo",          TokenKind::Identifier("println".to_string()));
+        m.insert("chhapo",        TokenKind::Identifier("println".to_string()));
+        m.insert("chapo",         TokenKind::Identifier("println".to_string()));
+        m.insert("batao",         TokenKind::Identifier("println".to_string()));
+        m.insert("print_karo",    TokenKind::Identifier("println".to_string()));
+        // Input intrinsics
+        m.insert("padho",         TokenKind::Identifier("readline".to_string()));
+        m.insert("pucho",         TokenKind::Identifier("readline".to_string()));
+        // Class / struct
+        m.insert("dhancha",       TokenKind::Class);
+        m.insert("varg",          TokenKind::Class);
+        m.insert("dhanche",       TokenKind::Class);
+        // This / self
+        m.insert("ye",            TokenKind::This);
+        m.insert("yeh",           TokenKind::This);
+        m.insert("apna",          TokenKind::This);
+        m.insert("apne",          TokenKind::This);
+        m.insert("khud",          TokenKind::This);
+        m.insert("swayam",        TokenKind::This);
+        m.insert("mera",          TokenKind::This);
+        m.insert("khud_ka",       TokenKind::This);
+        m.insert("apun",          TokenKind::This);
+        // Async/concurrent
+        m.insert("asynchronous",  TokenKind::Async);
+        m.insert("pratiksha",     TokenKind::Await);
+        m.insert("intezaar",      TokenKind::Await);
+        m.insert("ruko_aur",      TokenKind::Await);
+        // Spawn / thread
+        m.insert("chalao_thread", TokenKind::SpawnKeyword);
+        m.insert("uthao",         TokenKind::SpawnKeyword);
 
 
         // ── Bhojpuri (भोजपुरी) ────────────────────────────────────────────────
@@ -495,9 +596,16 @@ impl<'a> Lexer<'a> {
             "@" => {
                 let id = self.read_identifier();
                 match id.as_str() {
+                    // English
                     "main"   => TokenKind::MainDecorator,
                     "extern" => TokenKind::ExternDecorator,
                     "inline" => TokenKind::InlineDecorator,
+                    // Hinglish: main decorator aliases
+                    "mukhiya" | "mukhya" | "khas" | "mukh" | "pradhan" | "pramukh" => TokenKind::MainDecorator,
+                    // Hinglish: extern decorator aliases
+                    "bahar" | "bahaar" | "videshi" | "bahari" | "baahri" => TokenKind::ExternDecorator,
+                    // Hinglish: inline decorator aliases
+                    "andar" | "bheetar" | "bhitari" | "bheeter" => TokenKind::InlineDecorator,
                     _        => TokenKind::At,
                 }
             }

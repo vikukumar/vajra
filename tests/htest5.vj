@@ -1,0 +1,18 @@
+@mukhiya
+fn shuruat():
+    // Nested function test
+    karya bahar(val):
+        karya andar(x):
+            bhejo x * 2
+        bhejo andar(val) + 10
+    
+    dikhao(bahar(5))
+
+    // Callback test
+    karya lagao(f, v):
+        bhejo f(v)
+
+    karya teen_guna(n):
+        bhejo n * 3
+
+    dikhao(lagao(teen_guna, 7))

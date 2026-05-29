@@ -444,10 +444,11 @@ impl<'a> Parser<'a> {
                 TokenKind::Question => {
                     self.next_token();
                     let then_expr = self.parse_expression(0);
-                    if self.cur_token.kind != TokenKind::Colon {
-                        panic!("Syntax Error: Mismatched ':' for ternary operator '?' on line {}", self.cur_token.line);
+                    // Accept ':' (standard) OR Else token (warna/nahito/else) as separator
+                    if self.cur_token.kind != TokenKind::Colon && self.cur_token.kind != TokenKind::Else {
+                        panic!("Syntax Error: Expected ':' or 'warna'/'else' for ternary operator on line {}", self.cur_token.line);
                     }
-                    self.next_token(); // skip ':'
+                    self.next_token(); // skip ':' or 'warna'/'else'
                     let else_expr = self.parse_expression(next_prec - 1);
                     left = Expression::Ternary {
                         condition: Box::new(left),
@@ -468,7 +469,14 @@ impl<'a> Parser<'a> {
                     left = match left {
                         Expression::Identifier(name) => {
                             if is_print_name(&name) {
-                                if name.ends_with("ln") || name == "लिखो" || name == "छापा" || name == "मुद्रित" {
+                                if name.ends_with("ln") || name == "println"
+                                    || name == "\u{932}\u{93f}\u{916}\u{94b}"   // लिखो
+                                    || name == "\u{091b}\u{093e}\u{092a}\u{093e}" // छापा
+                                    || name == "\u{092e}\u{941}\u{926}\u{94d}\u{930}\u{093f}\u{924}" // मुद्रित
+                                    || name == "dikhao" || name == "likho" || name == "bol"
+                                    || name == "bolo" || name == "chhapo" || name == "chapo"
+                                    || name == "batao" || name == "print_karo"
+                                {
                                     Expression::Intrinsic(Intrinsic::PrintLn(args))
                                 } else {
                                     Expression::Intrinsic(Intrinsic::Print(args))
@@ -491,7 +499,15 @@ impl<'a> Parser<'a> {
                                 _ => false,
                             };
                             if is_print_call || is_print_name(&property) {
-                                if property.ends_with("ln") || property == "लिखो" || property == "छापा" || property == "मुद्रित" || property == "log" {
+                                if property.ends_with("ln") || property == "println"
+                                    || property == "\u{932}\u{93f}\u{916}\u{94b}"   // लिखो
+                                    || property == "\u{091b}\u{093e}\u{092a}\u{093e}" // छापा
+                                    || property == "\u{092e}\u{941}\u{926}\u{94d}\u{930}\u{093f}\u{924}" // मुद्रित
+                                    || property == "dikhao" || property == "likho" || property == "bol"
+                                    || property == "bolo" || property == "chhapo" || property == "chapo"
+                                    || property == "batao" || property == "print_karo"
+                                    || property == "log"
+                                {
                                     Expression::Intrinsic(Intrinsic::PrintLn(args))
                                 } else {
                                     Expression::Intrinsic(Intrinsic::Print(args))
@@ -972,9 +988,14 @@ impl<'a> Parser<'a> {
 
         let mut catch_var = "e".to_string();
         if self.cur_token.kind == TokenKind::LParen {
+            // catch(e) { ... } syntax
             self.next_token();
             if let TokenKind::Identifier(id) = &self.cur_token.kind { catch_var = id.clone(); self.next_token(); }
             if self.cur_token.kind == TokenKind::RParen { self.next_token(); }
+        } else if let TokenKind::Identifier(id) = &self.cur_token.kind.clone() {
+            // catch e { ... } or `pakdo e:` (after preprocessor: `pakdo e{`) - bare variable without parens
+            catch_var = id.clone();
+            self.next_token();
         }
 
         self.skip_newlines();
@@ -1095,10 +1116,31 @@ impl<'a> Parser<'a> {
 
 fn is_print_name(name: &str) -> bool {
     matches!(name,
-        "print" | "println" | "लिखो" | "मुद्रित" | "लेखन" | "likho" | "mudrit"
-        | "अच्सिडु" | "அச்சிடு" | "طباعة" | "打印" | "imprimir" | "afficher"
-        | "drucken" | "표시" | "छापा" | "ముద్రించు" | "ಮುದ್ರಿಸು" | "मुद्रण"
-        | "मुद्रिसु" | "печать" | "출력" | "表示" | "Console.log"
-        | "console_log"
+        // English
+        "print" | "println"
+        // Hindi / Sanskrit scripts
+        | "\u{932}\u{93f}\u{916}\u{94b}"     // लिखो
+        | "\u{092e}\u{941}\u{926}\u{94d}\u{930}\u{93f}\u{924}" // मुद्रित
+        | "\u{932}\u{947}\u{916}\u{928}"   // लेखन
+        | "mudrit" | "likho"
+        | "\u{905}\u{091a}\u{94d}\u{938}\u{093f}\u{921}\u{941}" // अच्सिडु (incorrect but kept for compat)
+        | "\u{0b85}\u{0b9a}\u{0bcd}\u{0b9a}\u{0bbf}\u{0b9f}\u{0bc1}" // அச்சிடு Tamil
+        | "\u{0637}\u{0628}\u{0627}\u{0639}\u{0629}" // طباعة Arabic
+        | "\u{6253}\u{5370}"   // 打印 Chinese
+        | "imprimir"           // Spanish
+        | "afficher"           // French
+        | "drucken"            // German
+        | "\u{D45C}\u{C2DC}"  // 표시 Korean
+        | "\u{091b}\u{093e}\u{092a}\u{093e}" // छापा Marathi
+        | "\u{0c2e}\u{0c41}\u{0c26}\u{0c4d}\u{0c30}\u{0c3f}\u{0c02}\u{0c1a}\u{0c41}" // ముద్రించు Telugu
+        | "\u{0cae}\u{0cc1}\u{0ca6}\u{0ccd}\u{0cb0}\u{0cbf}\u{0cb8}\u{0cc1}" // ಮುದ್ರಿಸು Kannada
+        | "\u{092e}\u{941}\u{926}\u{094d}\u{930}\u{0923}" // मुद्रण Bengali
+        | "\u{092e}\u{941}\u{926}\u{094d}\u{0930}\u{093f}\u{0938}\u{0941}" // मुद्रिसु
+        | "\u{043f}\u{0435}\u{0447}\u{0430}\u{0442}\u{044c}" // печать Russian
+        | "\u{CD9C}\u{B825}"  // 출력 Korean (alternate)
+        | "\u{8868}\u{793A}"  // 表示 Japanese
+        | "Console.log" | "console_log"
+        // Hinglish synonyms (all map to println intrinsic)
+        | "dikhao" | "bol" | "bolo" | "chhapo" | "chapo" | "batao" | "print_karo"
     )
 }

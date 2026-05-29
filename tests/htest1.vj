@@ -1,0 +1,3 @@
+// Test just keywords
+rakho x = 42
+dikhao(x)

@@ -1,0 +1,23 @@
+// Minimal Hinglish test
+
+rakho naam = "Vajra"
+rakho a = sahi
+rakho b = galat
+
+agar a:
+    dikhao("sahi hai")
+warna:
+    dikhao("galat hai")
+
+rakho x = 10
+rakho y = 20
+rakho bada = x > y toh x warna y
+dikhao(bada)
+
+bol("bol works")
+bolo("bolo works")
+
+rakho count = 0
+jab_tak count < 3:
+    count = count + 1
+dikhao(count)

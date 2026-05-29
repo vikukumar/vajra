@@ -1,0 +1,7 @@
+@mukhiya
+fn shuruat():
+    koshish:
+        rakho z = 100 / 5
+        dikhao(z)
+    pakdo e:
+        bol("pakda!")

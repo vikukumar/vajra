@@ -1,0 +1,118 @@
+// ============================================================
+// Hinglish Integration Test — vajra/tests/hinglish_test.vj
+// Tests: keywords, operators, ternary, decorators, nesting,
+//        callbacks, try/catch, loops, import-style aliases
+// ============================================================
+
+// ── 1. Variable declarations ─────────────────────────────────
+rakho naam = "Vajra"
+lelo version = 1
+maan sankhya = 42
+dharo pi = 3.14
+banao flag = sahi       // sahi = true
+set_karo empty = khali  // khali = null
+
+// ── 2. Boolean values & boolean word operators ───────────────
+rakho a = sahi          // true
+rakho b = galat         // false
+rakho c = a aur b       // aur = &&  -> false
+rakho d = a ya b        // ya  = ||  -> true
+
+// ── 3. Basic conditionals ────────────────────────────────────
+agar a:
+    dikhao("a sahi hai")
+warna:
+    dikhao("a galat hai")
+
+// ── 4. Hinglish ternary operator ─────────────────────────────
+rakho x = 10
+rakho y = 20
+rakho bada = x > y toh x warna y    // toh=? warna=else
+dikhao(bada)   // 20
+
+// Standard '?' ternary still works
+rakho bada2 = x > y ? x : y
+dikhao(bada2)  // 20
+
+// ── 5. While loop ────────────────────────────────────────────
+rakho count = 0
+jab_tak count < 3:
+    count = count + 1
+dikhao(count)  // 3
+
+// ── 6. For loop with 'me' (in) ───────────────────────────────
+rakho total = 0
+chalao i me [1, 2, 3, 4, 5]:
+    total = total + i
+dikhao(total)  // 15
+
+// ── 7. Break / Continue (bas / chalo_aage) ───────────────────
+rakho sum = 0
+chalao n me [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+    agar n % 2 == 0:
+        chalo_aage        // skip even numbers
+    agar n > 7:
+        bas               // stop at 7
+    sum = sum + n
+dikhao(sum)   // 1+3+5+7 = 16
+
+// ── 8. Functions ─────────────────────────────────────────────
+karya jodo(p, q):
+    bhejo p + q
+
+dikhao(jodo(3, 4))   // 7
+
+vidhi guno(p, q):
+    vapasi p * q
+
+dikhao(guno(3, 4))   // 12
+
+// ── 9. Nested functions ───────────────────────────────────────
+karya bahari_fn(val):
+    karya andar_fn(x):
+        bhejo x * 2
+    bhejo andar_fn(val) + 1
+
+dikhao(bahari_fn(5))   // 11
+
+// ── 10. Callbacks ─────────────────────────────────────────────
+karya apply(f, v):
+    bhejo f(v)
+
+karya double(n):
+    bhejo n * 2
+
+dikhao(apply(double, 7))   // 14
+
+// ── 11. Try / catch / throw ───────────────────────────────────
+koshish:
+    rakho z = 10 / 2
+    dikhao(z)   // 5
+pakdo e:
+    dikhao("error pakda!")
+
+// ── 12. Print synonyms ────────────────────────────────────────
+bol("bol se print")
+bolo("bolo se print")
+likho("likho se print")
+chapo("chapo se print")
+chhapo("chhapo se print")
+batao("batao se print")
+
+// ── 13. Logical NOT (nahi) ────────────────────────────────────
+rakho truth = sahi         // true
+rakho lie   = nahi truth   // nahi = !
+dikhao(lie)   // false
+
+// ── 14. More boolean aliases ──────────────────────────────────
+rakho p = sach             // sach = true
+rakho q = jhooth           // jhooth = false
+rakho pq = p aur q         // false
+rakho pq2 = p ya q         // true
+dikhao(pq)    // false
+dikhao(pq2)   // true
+
+// ── 15. Alternate decorator aliases compile-tested elsewhere ──
+// @mukhiya  -> @main
+// @bahar    -> @extern
+// @andar    -> @inline

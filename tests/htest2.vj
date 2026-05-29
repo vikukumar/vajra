@@ -1,0 +1,5 @@
+// Test with @main
+@main
+fn main():
+    rakho x = 42
+    dikhao(x)
